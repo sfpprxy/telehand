@@ -37,6 +37,7 @@ jobs:
 
       - name: Download EasyTier
         run: |
+          mkdir -p easytier-bin
           curl -fsSL "https://github.com/EasyTier/EasyTier/releases/download/v2.4.5/${{ matrix.et_asset }}" -o et.zip
           unzip -o -j et.zip "${{ matrix.et_bin }}" -d /tmp/et
           cp /tmp/et/* ${{ matrix.et_dest }}
