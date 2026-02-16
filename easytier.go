@@ -2,12 +2,11 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,28 +17,38 @@ type EasyTier struct {
 	cmd     *exec.Cmd
 	tmpDir  string
 	VirtIP  string
+	rpcPort string
+	cliBin  string
 	mu      sync.Mutex
 	logs    []string
-	onIP    func(string)
+	onLog   func(string)
 }
 
-func NewEasyTier(cfg *Config, onIP func(string)) *EasyTier {
-	return &EasyTier{onIP: onIP}
+func NewEasyTier(onLog func(string)) *EasyTier {
+	return &EasyTier{onLog: onLog, rpcPort: "18899"}
 }
 
 func (et *EasyTier) Start(cfg *Config) error {
-	dir, err := os.MkdirTemp("", "remote-assist-et-")
+	dir, err := os.MkdirTemp("", "telehand-et-")
 	if err != nil {
 		return err
 	}
 	et.tmpDir = dir
 
-	binName := "easytier-core"
+	coreName := "easytier-core"
+	cliName := "easytier-cli"
 	if runtime.GOOS == "windows" {
-		binName = "easytier-core.exe"
+		coreName = "easytier-core.exe"
+		cliName = "easytier-cli.exe"
 	}
-	binPath := filepath.Join(dir, binName)
-	if err := os.WriteFile(binPath, embeddedEasyTier, 0755); err != nil {
+
+	corePath := filepath.Join(dir, coreName)
+	if err := os.WriteFile(corePath, embeddedEasyTier, 0755); err != nil {
+		return err
+	}
+
+	et.cliBin = filepath.Join(dir, cliName)
+	if err := os.WriteFile(et.cliBin, embeddedEasyTierCli, 0755); err != nil {
 		return err
 	}
 
@@ -47,12 +56,15 @@ func (et *EasyTier) Start(cfg *Config) error {
 		"--dhcp",
 		"--network-name", cfg.NetworkName,
 		"--network-secret", cfg.NetworkSecret,
+		"-l", "tcp://0.0.0.0:0",
+		"-l", "udp://0.0.0.0:0",
+		"-r", fmt.Sprintf("127.0.0.1:%s", et.rpcPort),
 	}
 	for _, p := range cfg.Peers {
 		args = append(args, "--peers", p)
 	}
 
-	et.cmd = exec.Command(binPath, args...)
+	et.cmd = exec.Command(corePath, args...)
 	et.cmd.Dir = dir
 
 	stdout, err := et.cmd.StdoutPipe()
@@ -65,9 +77,6 @@ func (et *EasyTier) Start(cfg *Config) error {
 		return err
 	}
 
-	ipRe := regexp.MustCompile(`ipv4_addr=(\d+\.\d+\.\d+\.\d+)`)
-	dhcpRe := regexp.MustCompile(`dhcp.*?(\d+\.\d+\.\d+\.\d+)`)
-
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
@@ -75,19 +84,8 @@ func (et *EasyTier) Start(cfg *Config) error {
 			et.mu.Lock()
 			et.logs = append(et.logs, line)
 			et.mu.Unlock()
-
-			if et.VirtIP == "" {
-				if m := ipRe.FindStringSubmatch(line); len(m) > 1 {
-					et.VirtIP = m[1]
-					if et.onIP != nil {
-						et.onIP(et.VirtIP)
-					}
-				} else if m := dhcpRe.FindStringSubmatch(line); len(m) > 1 {
-					et.VirtIP = m[1]
-					if et.onIP != nil {
-						et.onIP(et.VirtIP)
-					}
-				}
+			if et.onLog != nil {
+				et.onLog(line)
 			}
 		}
 	}()
@@ -95,42 +93,37 @@ func (et *EasyTier) Start(cfg *Config) error {
 	return nil
 }
 
+type nodeInfo struct {
+	IPv4Addr string `json:"ipv4_addr"`
+}
+
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if et.VirtIP != "" {
-			return et.VirtIP, nil
+		ip := et.queryIP()
+		if ip != "" {
+			et.VirtIP = ip
+			return ip, nil
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 	}
-
-	// fallback: try to find EasyTier interface IP
-	if ip := et.findEasyTierIP(); ip != "" {
-		et.VirtIP = ip
-		return ip, nil
-	}
-
 	return "", fmt.Errorf("timeout waiting for EasyTier virtual IP")
 }
 
-func (et *EasyTier) findEasyTierIP() string {
-	ifaces, err := net.Interfaces()
+func (et *EasyTier) queryIP() string {
+	cmd := exec.Command(et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "node", "info")
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	for _, iface := range ifaces {
-		name := strings.ToLower(iface.Name)
-		if strings.Contains(name, "easytier") || strings.Contains(name, "tun") {
-			addrs, err := iface.Addrs()
-			if err != nil {
-				continue
-			}
-			for _, addr := range addrs {
-				if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-					return ipnet.IP.String()
-				}
-			}
-		}
+	var info nodeInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return ""
+	}
+	// ipv4_addr is like "10.126.126.2/24", strip the mask
+	ip := strings.Split(info.IPv4Addr, "/")[0]
+	if ip != "" && ip != "0.0.0.0" {
+		return ip
 	}
 	return ""
 }

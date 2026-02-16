@@ -14,13 +14,14 @@ import (
 var guiFS embed.FS
 
 type GUIServer struct {
-	port     int
-	listener net.Listener
-	mux      *http.ServeMux
-	mu       sync.Mutex
-	state    GUIState
-	configCh chan *Config
-	logs     []CmdLog
+	port      int
+	listener  net.Listener
+	mux       *http.ServeMux
+	mu        sync.Mutex
+	state     GUIState
+	configCh  chan *Config
+	logs      []CmdLog
+	debugLogs []string
 }
 
 type GUIState struct {
@@ -41,6 +42,7 @@ func NewGUIServer(startPort int) *GUIServer {
 	g.mux.HandleFunc("/api/submit-config", g.handleSubmitConfig)
 	g.mux.HandleFunc("/api/state", g.handleState)
 	g.mux.HandleFunc("/api/logs", g.handleLogs)
+	g.mux.HandleFunc("/api/debug-logs", g.handleDebugLogs)
 	g.mux.HandleFunc("/api/stop", g.handleStop)
 	return g
 }
@@ -75,6 +77,12 @@ func (g *GUIServer) SetState(s GUIState) {
 func (g *GUIServer) AddLog(log CmdLog) {
 	g.mu.Lock()
 	g.logs = append(g.logs, log)
+	g.mu.Unlock()
+}
+
+func (g *GUIServer) AddDebugLog(line string) {
+	g.mu.Lock()
+	g.debugLogs = append(g.debugLogs, line)
 	g.mu.Unlock()
 }
 
@@ -127,6 +135,14 @@ func (g *GUIServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	logs := make([]CmdLog, len(g.logs))
 	copy(logs, g.logs)
+	g.mu.Unlock()
+	jsonResp(w, 200, logs)
+}
+
+func (g *GUIServer) handleDebugLogs(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	logs := make([]string, len(g.debugLogs))
+	copy(logs, g.debugLogs)
 	g.mu.Unlock()
 	jsonResp(w, 200, logs)
 }

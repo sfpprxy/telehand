@@ -17,15 +17,19 @@ jobs:
             goos: windows
             goarch: amd64
             et_asset: easytier-windows-x86_64-v2.4.5.zip
-            et_bin: easytier-windows-x86_64/easytier-core.exe
-            et_dest: easytier-bin/easytier-core.exe
+            et_core: easytier-windows-x86_64/easytier-core.exe
+            et_cli: easytier-windows-x86_64/easytier-cli.exe
+            et_core_dest: easytier-bin/easytier-core.exe
+            et_cli_dest: easytier-bin/easytier-cli.exe
             output: telehand.exe
           - os: macos-latest
             goos: darwin
             goarch: arm64
             et_asset: easytier-macos-aarch64-v2.4.5.zip
-            et_bin: easytier-macos-aarch64/easytier-core
-            et_dest: easytier-bin/easytier-core-darwin
+            et_core: easytier-macos-aarch64/easytier-core
+            et_cli: easytier-macos-aarch64/easytier-cli
+            et_core_dest: easytier-bin/easytier-core-darwin
+            et_cli_dest: easytier-bin/easytier-cli-darwin
             output: telehand
     runs-on: ${{ matrix.os }}
     steps:
@@ -39,9 +43,11 @@ jobs:
         run: |
           mkdir -p easytier-bin
           curl -fsSL "https://github.com/EasyTier/EasyTier/releases/download/v2.4.5/${{ matrix.et_asset }}" -o et.zip
-          unzip -o -j et.zip "${{ matrix.et_bin }}" -d /tmp/et
-          cp /tmp/et/* ${{ matrix.et_dest }}
-          chmod +x ${{ matrix.et_dest }}
+          unzip -o -j et.zip "${{ matrix.et_core }}" -d /tmp/et-core
+          unzip -o -j et.zip "${{ matrix.et_cli }}" -d /tmp/et-cli
+          cp /tmp/et-core/* ${{ matrix.et_core_dest }}
+          cp /tmp/et-cli/* ${{ matrix.et_cli_dest }}
+          chmod +x ${{ matrix.et_core_dest }} ${{ matrix.et_cli_dest }}
 
       - name: Build
         env:

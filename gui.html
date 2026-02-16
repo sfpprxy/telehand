@@ -7,7 +7,7 @@
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-.container { background: #fff; border-radius: 12px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); padding: 40px; width: 480px; text-align: center; }
+.container { background: #fff; border-radius: 12px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); padding: 40px; width: 560px; text-align: center; }
 h1 { font-size: 22px; margin-bottom: 8px; }
 .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
 textarea { width: 100%; height: 80px; border: 2px solid #ddd; border-radius: 8px; padding: 12px; font-size: 14px; resize: none; font-family: monospace; }
@@ -18,19 +18,21 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
 .btn-danger { background: #e74c3c; color: #fff; }
 .btn-danger:hover { background: #c0392b; }
-.status { margin: 20px 0; }
 .ip-box { background: #f0f7ff; border: 2px solid #4a90d9; border-radius: 8px; padding: 16px; margin: 16px 0; display: flex; align-items: center; justify-content: center; gap: 12px; }
 .ip-text { font-size: 24px; font-weight: bold; font-family: monospace; color: #2c3e50; }
 .btn-copy { padding: 6px 16px; font-size: 13px; background: #4a90d9; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .btn-copy:hover { background: #357abd; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 .dot-green { background: #2ecc71; }
-.dot-yellow { background: #f1c40f; }
-.log-area { text-align: left; background: #1e1e1e; color: #d4d4d4; border-radius: 8px; padding: 12px; margin-top: 16px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+.log-area { text-align: left; background: #1e1e1e; color: #d4d4d4; border-radius: 8px; padding: 12px; margin-top: 16px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 12px; }
 .log-line { padding: 2px 0; }
 .log-time { color: #888; }
 .log-method { color: #4a90d9; }
 .log-path { color: #e6c07b; }
+.debug-section { margin-top: 20px; text-align: left; }
+.debug-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.debug-title { font-size: 13px; color: #888; }
+.debug-area { background: #0d1117; color: #8b949e; border-radius: 8px; padding: 12px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
 .phase-connecting { color: #f39c12; }
 .error { color: #e74c3c; margin-top: 12px; }
 .hidden { display: none; }
@@ -49,7 +51,13 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 
   <div id="phase-connecting" class="hidden">
     <p class="subtitle phase-connecting">正在连接网络，请稍候...</p>
-    <div class="spinner"></div>
+    <div class="debug-section">
+      <div class="debug-header">
+        <span class="debug-title">Debug 日志</span>
+        <button class="btn-copy" onclick="copyDebugLogs()">复制日志</button>
+      </div>
+      <div class="debug-area" id="debug-area-connecting"></div>
+    </div>
   </div>
 
   <div id="phase-running" class="hidden">
@@ -61,18 +69,34 @@ textarea:focus { outline: none; border-color: #4a90d9; }
     <p style="color:#888;font-size:13px;" id="port-info"></p>
     <p style="color:#888;font-size:13px;margin-top:4px;">请将上方 IP 发送给对方</p>
     <div class="log-area" id="log-area"></div>
+    <div class="debug-section">
+      <div class="debug-header">
+        <span class="debug-title">Debug 日志</span>
+        <button class="btn-copy" onclick="copyDebugLogs()">复制日志</button>
+      </div>
+      <div class="debug-area" id="debug-area-running"></div>
+    </div>
     <button class="btn btn-danger" style="margin-top:16px;" onclick="stopAgent()">断开连接</button>
   </div>
 
   <div id="phase-error" class="hidden">
     <p class="error" id="error-msg"></p>
-    <button class="btn btn-primary" onclick="location.reload()">重试</button>
+    <div class="debug-section">
+      <div class="debug-header">
+        <span class="debug-title">Debug 日志</span>
+        <button class="btn-copy" onclick="copyDebugLogs()">复制日志</button>
+      </div>
+      <div class="debug-area" id="debug-area-error"></div>
+    </div>
+    <button class="btn btn-primary" style="margin-top:16px;" onclick="location.reload()">重试</button>
   </div>
 </div>
 
 <script>
 let pollTimer = null;
 let logPollTimer = null;
+let debugPollTimer = null;
+let cachedDebugLogs = [];
 
 async function submitConfig() {
   const input = document.getElementById('config-input').value.trim();
@@ -96,6 +120,7 @@ async function submitConfig() {
     }
     showPhase('connecting');
     pollTimer = setInterval(pollState, 1000);
+    debugPollTimer = setInterval(pollDebugLogs, 1000);
   } catch(e) {
     document.getElementById('config-error').textContent = '连接失败: ' + e.message;
     document.getElementById('config-error').classList.remove('hidden');
@@ -136,8 +161,29 @@ async function pollLogs() {
   } catch(e) {}
 }
 
+async function pollDebugLogs() {
+  try {
+    const resp = await fetch('/api/debug-logs');
+    cachedDebugLogs = await resp.json();
+    const areas = document.querySelectorAll('.debug-area');
+    const html = cachedDebugLogs.map(l => escapeHtml(l)).join('\n');
+    areas.forEach(a => { a.textContent = cachedDebugLogs.join('\n'); a.scrollTop = a.scrollHeight; });
+  } catch(e) {}
+}
+
+function copyDebugLogs() {
+  const text = cachedDebugLogs.join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
 async function stopAgent() {
   if (logPollTimer) clearInterval(logPollTimer);
+  if (debugPollTimer) clearInterval(debugPollTimer);
   try { await fetch('/api/stop', {method:'POST'}); } catch(e) {}
   document.querySelector('.container').innerHTML = '<h1>已断开</h1><p class="subtitle" style="margin-top:12px;">远程协助已结束，可以关闭此页面。</p>';
 }

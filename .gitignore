@@ -1,5 +1,7 @@
 dist/
 telehand
+remote-assist
 easytier-bin/easytier-core-darwin
 easytier-bin/easytier-core.exe
-remote-assist
+easytier-bin/easytier-cli-darwin
+easytier-bin/easytier-cli.exe

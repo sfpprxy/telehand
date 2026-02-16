@@ -28,7 +28,9 @@ func runServe() {
 	}
 
 	fmt.Println("Starting EasyTier...")
-	et := NewEasyTier(cfg, nil)
+	et := NewEasyTier(func(line string) {
+		gui.AddDebugLog(line)
+	})
 	if err := et.Start(cfg); err != nil {
 		gui.SetState(GUIState{Phase: "error", Error: fmt.Sprintf("EasyTier failed: %v", err)})
 		fmt.Fprintf(os.Stderr, "EasyTier failed: %v\n", err)
