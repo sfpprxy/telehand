@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: windows
+            goarch: amd64
+            et_asset: easytier-windows-x86_64-v2.4.5.zip
+            et_bin: easytier-windows-x86_64/easytier-core.exe
+            et_dest: easytier-bin/easytier-core.exe
+            output: telehand.exe
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            et_asset: easytier-macos-aarch64-v2.4.5.zip
+            et_bin: easytier-macos-aarch64/easytier-core
+            et_dest: easytier-bin/easytier-core-darwin
+            output: telehand
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Download EasyTier
+        run: |
+          curl -fsSL "https://github.com/EasyTier/EasyTier/releases/download/v2.4.5/${{ matrix.et_asset }}" -o et.zip
+          unzip -o -j et.zip "${{ matrix.et_bin }}" -d /tmp/et
+          cp /tmp/et/* ${{ matrix.et_dest }}
+          chmod +x ${{ matrix.et_dest }}
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -o ${{ matrix.output }} .
+
+      - name: Package
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="telehand-${{ matrix.goos }}-${{ matrix.goarch }}-${TAG}.zip"
+          zip "${ARCHIVE}" ${{ matrix.output }}
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telehand-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
