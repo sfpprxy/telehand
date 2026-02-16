@@ -20,10 +20,14 @@ case "$ARCH" in
   *)             echo "Unsupported arch: $ARCH"; exit 1 ;;
 esac
 
-# Get latest version
+# Get latest version with fallback
 get_latest_version() {
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | \
-    grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || echo ""
+  for api_url in \
+    "https://api.github.com/repos/${REPO}/releases/latest" \
+    "https://ghfast.top/https://api.github.com/repos/${REPO}/releases/latest"; do
+    ver=$(curl -fsSL "$api_url" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -n "$ver" ]; then echo "$ver"; return; fi
+  done
 }
 
 VERSION=$(get_latest_version)

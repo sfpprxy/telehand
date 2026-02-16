@@ -6,11 +6,22 @@ $binaryName = "telehand.exe"
 # Detect arch
 $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "386" }
 
-# Get latest version
-try {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -UseBasicParsing
-    $version = $release.tag_name
-} catch {
+# Get latest version with fallback
+$version = $null
+$apiUrls = @(
+    "https://api.github.com/repos/$repo/releases/latest",
+    "https://ghfast.top/https://api.github.com/repos/$repo/releases/latest"
+)
+foreach ($apiUrl in $apiUrls) {
+    try {
+        $release = Invoke-RestMethod -Uri $apiUrl
+        $version = $release.tag_name
+        break
+    } catch {
+        continue
+    }
+}
+if (-not $version) {
     Write-Error "Failed to get latest version"
     exit 1
 }
