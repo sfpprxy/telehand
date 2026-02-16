@@ -37,8 +37,7 @@ FILENAME="${BINARY_NAME}-${GOOS}-${GOARCH}-${VERSION}.zip"
 # Download sources with fallback
 URLS=(
   "https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
-  "https://ghproxy.com/https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
-  "https://mirror.ghproxy.com/https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+  "https://ghfast.top/https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 )
 
 echo "Installing ${BINARY_NAME} ${VERSION} (${GOOS}/${GOARCH})..."

@@ -19,8 +19,7 @@ $filename = "telehand-windows-$arch-$version.zip"
 
 $urls = @(
     "https://github.com/$repo/releases/download/$version/$filename",
-    "https://ghproxy.com/https://github.com/$repo/releases/download/$version/$filename",
-    "https://mirror.ghproxy.com/https://github.com/$repo/releases/download/$version/$filename"
+    "https://ghfast.top/https://github.com/$repo/releases/download/$version/$filename"
 )
 
 Write-Host "Installing telehand $version (windows/$arch)..."
