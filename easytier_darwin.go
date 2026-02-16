@@ -1,0 +1,8 @@
+//go:build darwin
+
+package main
+
+import _ "embed"
+
+//go:embed easytier-bin/easytier-core-darwin
+var embeddedEasyTier []byte

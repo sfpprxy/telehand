@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>远程协助</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+.container { background: #fff; border-radius: 12px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); padding: 40px; width: 480px; text-align: center; }
+h1 { font-size: 22px; margin-bottom: 8px; }
+.subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
+textarea { width: 100%; height: 80px; border: 2px solid #ddd; border-radius: 8px; padding: 12px; font-size: 14px; resize: none; font-family: monospace; }
+textarea:focus { outline: none; border-color: #4a90d9; }
+.btn { display: inline-block; padding: 12px 32px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; margin-top: 16px; transition: background 0.2s; }
+.btn-primary { background: #4a90d9; color: #fff; }
+.btn-primary:hover { background: #357abd; }
+.btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+.btn-danger { background: #e74c3c; color: #fff; }
+.btn-danger:hover { background: #c0392b; }
+.status { margin: 20px 0; }
+.ip-box { background: #f0f7ff; border: 2px solid #4a90d9; border-radius: 8px; padding: 16px; margin: 16px 0; display: flex; align-items: center; justify-content: center; gap: 12px; }
+.ip-text { font-size: 24px; font-weight: bold; font-family: monospace; color: #2c3e50; }
+.btn-copy { padding: 6px 16px; font-size: 13px; background: #4a90d9; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+.btn-copy:hover { background: #357abd; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+.dot-green { background: #2ecc71; }
+.dot-yellow { background: #f1c40f; }
+.log-area { text-align: left; background: #1e1e1e; color: #d4d4d4; border-radius: 8px; padding: 12px; margin-top: 16px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+.log-line { padding: 2px 0; }
+.log-time { color: #888; }
+.log-method { color: #4a90d9; }
+.log-path { color: #e6c07b; }
+.phase-connecting { color: #f39c12; }
+.error { color: #e74c3c; margin-top: 12px; }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>远程协助</h1>
+
+  <div id="phase-config">
+    <p class="subtitle">请将对方发给你的配置码粘贴到下方</p>
+    <textarea id="config-input" placeholder="在此粘贴配置码..."></textarea>
+    <div id="config-error" class="error hidden"></div>
+    <button class="btn btn-primary" id="btn-start" onclick="submitConfig()">启动远程协助</button>
+  </div>
+
+  <div id="phase-connecting" class="hidden">
+    <p class="subtitle phase-connecting">正在连接网络，请稍候...</p>
+    <div class="spinner"></div>
+  </div>
+
+  <div id="phase-running" class="hidden">
+    <p class="subtitle"><span class="dot dot-green"></span>远程协助已启动</p>
+    <div class="ip-box">
+      <span class="ip-text" id="virt-ip"></span>
+      <button class="btn-copy" onclick="copyIP()">复制</button>
+    </div>
+    <p style="color:#888;font-size:13px;" id="port-info"></p>
+    <p style="color:#888;font-size:13px;margin-top:4px;">请将上方 IP 发送给对方</p>
+    <div class="log-area" id="log-area"></div>
+    <button class="btn btn-danger" style="margin-top:16px;" onclick="stopAgent()">断开连接</button>
+  </div>
+
+  <div id="phase-error" class="hidden">
+    <p class="error" id="error-msg"></p>
+    <button class="btn btn-primary" onclick="location.reload()">重试</button>
+  </div>
+</div>
+
+<script>
+let pollTimer = null;
+let logPollTimer = null;
+
+async function submitConfig() {
+  const input = document.getElementById('config-input').value.trim();
+  if (!input) return;
+  const btn = document.getElementById('btn-start');
+  btn.disabled = true;
+  document.getElementById('config-error').classList.add('hidden');
+
+  try {
+    const resp = await fetch('/api/submit-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({config: input})
+    });
+    const data = await resp.json();
+    if (data.error) {
+      document.getElementById('config-error').textContent = data.error;
+      document.getElementById('config-error').classList.remove('hidden');
+      btn.disabled = false;
+      return;
+    }
+    showPhase('connecting');
+    pollTimer = setInterval(pollState, 1000);
+  } catch(e) {
+    document.getElementById('config-error').textContent = '连接失败: ' + e.message;
+    document.getElementById('config-error').classList.remove('hidden');
+    btn.disabled = false;
+  }
+}
+
+async function pollState() {
+  try {
+    const resp = await fetch('/api/state');
+    const s = await resp.json();
+    if (s.phase === 'running') {
+      clearInterval(pollTimer);
+      document.getElementById('virt-ip').textContent = s.virt_ip + ':' + s.api_port;
+      document.getElementById('port-info').textContent = 'API 地址: http://' + s.virt_ip + ':' + s.api_port;
+      showPhase('running');
+      logPollTimer = setInterval(pollLogs, 2000);
+    } else if (s.phase === 'error' || s.error) {
+      clearInterval(pollTimer);
+      document.getElementById('error-msg').textContent = s.error || '未知错误';
+      showPhase('error');
+    }
+  } catch(e) {}
+}
+
+async function pollLogs() {
+  try {
+    const resp = await fetch('/api/logs');
+    const logs = await resp.json();
+    const area = document.getElementById('log-area');
+    area.innerHTML = logs.map(l =>
+      '<div class="log-line"><span class="log-time">' + l.time + '</span> ' +
+      '<span class="log-method">' + l.method + '</span> ' +
+      '<span class="log-path">' + l.path + '</span> ' +
+      escapeHtml(l.summary) + '</div>'
+    ).join('');
+    area.scrollTop = area.scrollHeight;
+  } catch(e) {}
+}
+
+async function stopAgent() {
+  if (logPollTimer) clearInterval(logPollTimer);
+  try { await fetch('/api/stop', {method:'POST'}); } catch(e) {}
+  document.querySelector('.container').innerHTML = '<h1>已断开</h1><p class="subtitle" style="margin-top:12px;">远程协助已结束，可以关闭此页面。</p>';
+}
+
+function copyIP() {
+  const text = document.getElementById('virt-ip').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target;
+    btn.textContent = '已复制';
+    setTimeout(() => btn.textContent = '复制', 1500);
+  });
+}
+
+function showPhase(phase) {
+  ['config','connecting','running','error'].forEach(p => {
+    document.getElementById('phase-' + p).classList.toggle('hidden', p !== phase);
+  });
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
