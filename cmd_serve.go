@@ -12,10 +12,33 @@ import (
 
 func runServe() {
 	gui := NewGUIServer(18080)
-	if err := gui.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start GUI: %v\n", err)
+	apiPort := 0
+	api := NewAPIServer("0.0.0.0", 8080, func(log CmdLog) {
+		gui.AddLog(log)
+	}, func() HealthResp {
+		s := gui.GetState()
+		return HealthResp{
+			Status:  "ok",
+			Phase:   s.Phase,
+			VirtIP:  s.VirtIP,
+			APIPort: apiPort,
+			GUIPort: gui.Port(),
+			Error:   s.Error,
+		}
+	})
+	if err := api.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start API server: %v\n", err)
 		os.Exit(1)
 	}
+	apiPort = api.Port()
+	fmt.Printf("API server started at http://0.0.0.0:%d\n", apiPort)
+
+	if err := gui.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start GUI: %v\n", err)
+		api.Stop()
+		os.Exit(1)
+	}
+	gui.SetState(GUIState{Phase: "config", APIPort: apiPort})
 	guiURL := fmt.Sprintf("http://127.0.0.1:%d", gui.Port())
 	fmt.Printf("GUI started at %s\n", guiURL)
 	openBrowser(guiURL)
@@ -23,6 +46,7 @@ func runServe() {
 	cfg := gui.WaitForConfig()
 	if cfg == nil {
 		fmt.Println("Stopped by user.")
+		api.Stop()
 		gui.Stop()
 		return
 	}
@@ -32,44 +56,42 @@ func runServe() {
 		gui.AddDebugLog(line)
 	})
 	if err := et.Start(cfg); err != nil {
-		gui.SetState(GUIState{Phase: "error", Error: fmt.Sprintf("EasyTier failed: %v", err)})
+		gui.SetState(GUIState{
+			Phase:   "error",
+			APIPort: apiPort,
+			Error:   fmt.Sprintf("EasyTier failed: %v", err),
+		})
 		fmt.Fprintf(os.Stderr, "EasyTier failed: %v\n", err)
 		waitForSignal()
 		et.Stop()
+		api.Stop()
 		gui.Stop()
 		return
 	}
 
 	ip, err := et.WaitForIP(30 * time.Second)
 	if err != nil {
-		gui.SetState(GUIState{Phase: "error", Error: "Failed to get virtual IP (timeout 30s)"})
+		gui.SetState(GUIState{
+			Phase:   "error",
+			APIPort: apiPort,
+			Error:   "Failed to get virtual IP (timeout 30s)",
+		})
 		fmt.Fprintf(os.Stderr, "Failed to get virtual IP: %v\n", err)
 		waitForSignal()
 		et.Stop()
+		api.Stop()
 		gui.Stop()
 		return
 	}
 
 	fmt.Printf("EasyTier virtual IP: %s\n", ip)
 
-	api := NewAPIServer(ip, 8080, func(log CmdLog) {
-		gui.AddLog(log)
-	})
-	if err := api.Start(); err != nil {
-		gui.SetState(GUIState{Phase: "error", Error: fmt.Sprintf("API server failed: %v", err)})
-		fmt.Fprintf(os.Stderr, "API server failed: %v\n", err)
-		waitForSignal()
-		et.Stop()
-		gui.Stop()
-		return
-	}
-
 	gui.SetState(GUIState{
 		Phase:   "running",
 		VirtIP:  ip,
-		APIPort: api.Port(),
+		APIPort: apiPort,
 	})
-	fmt.Printf("API server listening on %s:%d\n", ip, api.Port())
+	fmt.Printf("API server reachable at http://%s:%d\n", ip, apiPort)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

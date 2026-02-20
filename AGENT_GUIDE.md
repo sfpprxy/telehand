@@ -2,13 +2,31 @@
 
 ## 连接信息
 
-- **API 地址**: `http://<EASYTIER_VIRTUAL_IP>:<PORT>`
-- 所有请求均为 `POST`，请求体和响应体均为 JSON
+- **本地调试地址**: `http://127.0.0.1:<PORT>`（API 启动后即可用）
+- **远程访问地址**: `http://<EASYTIER_VIRTUAL_IP>:<PORT>`（组网成功后可用）
+- 业务接口使用 `POST`，健康检查接口使用 `GET /health`
 - 无需鉴权
 
 ## API 列表
 
-### 1. 执行命令 `POST /exec`
+### 1. 健康检查 `GET /health`
+
+返回当前运行状态，便于判活和排障。
+
+**响应示例**:
+```json
+{
+  "status": "ok",
+  "phase": "running",
+  "virt_ip": "10.126.126.2",
+  "api_port": 8080,
+  "gui_port": 18080
+}
+```
+
+`phase` 取值：`config` / `connecting` / `running` / `error`
+
+### 2. 执行命令 `POST /exec`
 
 在远程机器上执行 shell 命令。Windows 使用 PowerShell，macOS 使用默认 shell。
 
@@ -32,7 +50,7 @@
 - `code` 为 0 表示成功，非 0 表示失败
 - `code` 为 -1 表示进程启动失败
 
-### 2. 读文件 `POST /read`
+### 3. 读文件 `POST /read`
 
 读取文件内容，支持按行范围读取以节约上下文。
 
@@ -56,7 +74,7 @@
 - 先用 `offset=0, limit=0`（或不传 offset/limit）获取 `total_lines`，再按需分段读取
 - `offset` 是 0-based 行索引
 
-### 3. 写文件 `POST /write`
+### 4. 写文件 `POST /write`
 
 创建或覆盖整个文件。自动创建不存在的父目录。
 
@@ -75,7 +93,7 @@
 }
 ```
 
-### 4. 按行编辑 `POST /edit`
+### 5. 按行编辑 `POST /edit`
 
 替换文件中指定行范围的内容。行号从 1 开始。
 
@@ -103,7 +121,7 @@
 }
 ```
 
-### 5. 查找替换 `POST /patch`
+### 6. 查找替换 `POST /patch`
 
 在文件中查找文本并替换。
 
@@ -138,7 +156,7 @@
 - `old` 支持跨行匹配（用 `\n` 分隔）
 - 若 `old` 未找到，返回 404 错误
 
-### 6. 列目录 `POST /ls`
+### 7. 列目录 `POST /ls`
 
 **请求**:
 ```json
@@ -166,7 +184,7 @@
 }
 ```
 
-HTTP 状态码：
+HTTP 状态码（业务接口）：
 - 400: 请求参数错误
 - 404: 文件/目录不存在，或 old text 未找到
 - 405: HTTP 方法错误（所有接口只接受 POST）

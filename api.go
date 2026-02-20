@@ -23,6 +23,7 @@ type APIServer struct {
 	mu       sync.Mutex
 	cmdLogs  []CmdLog
 	onLog    func(CmdLog)
+	healthFn func() HealthResp
 }
 
 type CmdLog struct {
@@ -30,6 +31,15 @@ type CmdLog struct {
 	Method  string `json:"method"`
 	Path    string `json:"path"`
 	Summary string `json:"summary"`
+}
+
+type HealthResp struct {
+	Status  string `json:"status"`
+	Phase   string `json:"phase"`
+	VirtIP  string `json:"virt_ip,omitempty"`
+	APIPort int    `json:"api_port,omitempty"`
+	GUIPort int    `json:"gui_port,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 type ExecReq struct {
@@ -93,9 +103,15 @@ type LsResp struct {
 	Entries []LsEntry `json:"entries"`
 }
 
-func NewAPIServer(bindIP string, startPort int, onLog func(CmdLog)) *APIServer {
-	s := &APIServer{bindIP: bindIP, port: startPort, onLog: onLog}
+func NewAPIServer(bindIP string, startPort int, onLog func(CmdLog), healthFn func() HealthResp) *APIServer {
+	s := &APIServer{
+		bindIP:   bindIP,
+		port:     startPort,
+		onLog:    onLog,
+		healthFn: healthFn,
+	}
 	s.mux = http.NewServeMux()
+	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/exec", s.wrap(s.handleExec))
 	s.mux.HandleFunc("/read", s.wrap(s.handleRead))
 	s.mux.HandleFunc("/write", s.wrap(s.handleWrite))
@@ -160,6 +176,23 @@ func (s *APIServer) wrap(handler func(http.ResponseWriter, *http.Request)) http.
 		w.Header().Set("Content-Type", "application/json")
 		handler(w, r)
 	}
+}
+
+func (s *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if s.healthFn != nil {
+		json.NewEncoder(w).Encode(s.healthFn())
+		return
+	}
+	json.NewEncoder(w).Encode(HealthResp{
+		Status:  "ok",
+		Phase:   "unknown",
+		APIPort: s.Port(),
+	})
 }
 
 func jsonErr(w http.ResponseWriter, msg string, code int) {
@@ -457,5 +490,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-
-

@@ -72,6 +72,17 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release notes
+        run: |
+          NOTES_FILE=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ ! -s "${NOTES_FILE}" ]; then
+            echo "Missing or empty release notes file: ${NOTES_FILE}"
+            exit 1
+          fi
+          echo "Using release notes: ${NOTES_FILE}"
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -81,4 +92,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
-          generate_release_notes: true
+          body_path: .github/release-notes/${{ github.ref_name }}.md
+          generate_release_notes: false

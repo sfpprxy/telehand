@@ -74,6 +74,12 @@ func (g *GUIServer) SetState(s GUIState) {
 	g.mu.Unlock()
 }
 
+func (g *GUIServer) GetState() GUIState {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.state
+}
+
 func (g *GUIServer) AddLog(log CmdLog) {
 	g.mu.Lock()
 	g.logs = append(g.logs, log)
@@ -119,16 +125,17 @@ func (g *GUIServer) handleSubmitConfig(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	g.SetState(GUIState{Phase: "connecting"})
+	state := g.GetState()
+	state.Phase = "connecting"
+	state.VirtIP = ""
+	state.Error = ""
+	g.SetState(state)
 	g.configCh <- cfg
 	jsonResp(w, 200, map[string]string{"ok": "true"})
 }
 
 func (g *GUIServer) handleState(w http.ResponseWriter, r *http.Request) {
-	g.mu.Lock()
-	s := g.state
-	g.mu.Unlock()
-	jsonResp(w, 200, s)
+	jsonResp(w, 200, g.GetState())
 }
 
 func (g *GUIServer) handleLogs(w http.ResponseWriter, r *http.Request) {
