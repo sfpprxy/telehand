@@ -224,7 +224,7 @@
 - `matches` 数组包含所有匹配位置的行号（1-based）
 - 收到 warning 时，建议改用 `/edit` 按行号精确编辑
 - `old` 支持跨行匹配（用 `\n` 分隔）
-- 若 `old` 未找到，返回 404 错误
+- 若 `path` 文件不存在或 `old` 未找到，返回 400 错误
 
 ### 10. 列目录 `POST /ls`
 
@@ -258,8 +258,8 @@
 HTTP 状态码（业务接口）：
 - 400: 请求参数错误
 - 409: `POST /connect` 状态冲突（已在 connecting/running 或已有待处理配置）
-- 404: `POST /patch` 的 `old` 未找到（仅此场景）
-- 405: HTTP 方法错误（所有接口只接受 POST）
+- 404: API 路径不存在（例如 URL 写错）
+- 405: HTTP 方法错误（业务接口只接受 POST；`GET /health` 只接受 GET）
 - 500: 服务器内部错误
 
 常见 `error_code`：
