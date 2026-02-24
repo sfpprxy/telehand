@@ -54,7 +54,7 @@ textarea:focus { outline: none; border-color: #4a90d9; }
     <div class="debug-section">
       <div class="debug-header">
         <span class="debug-title">Debug 日志</span>
-        <button class="btn-copy" onclick="copyDebugLogs()">复制日志</button>
+        <button class="btn-copy" onclick="copyDebugLogs(this)">复制日志</button>
       </div>
       <div class="debug-area" id="debug-area-connecting"></div>
     </div>
@@ -64,7 +64,7 @@ textarea:focus { outline: none; border-color: #4a90d9; }
     <p class="subtitle"><span class="dot dot-green"></span>远程协助已启动</p>
     <div class="ip-box">
       <span class="ip-text" id="virt-ip"></span>
-      <button class="btn-copy" onclick="copyIP()">复制</button>
+      <button class="btn-copy" onclick="copyIP(this)">复制</button>
     </div>
     <p style="color:#888;font-size:13px;" id="port-info"></p>
     <p style="color:#888;font-size:13px;margin-top:4px;">请将上方 IP 发送给对方</p>
@@ -72,7 +72,7 @@ textarea:focus { outline: none; border-color: #4a90d9; }
     <div class="debug-section">
       <div class="debug-header">
         <span class="debug-title">Debug 日志</span>
-        <button class="btn-copy" onclick="copyDebugLogs()">复制日志</button>
+        <button class="btn-copy" onclick="copyDebugLogs(this)">复制日志</button>
       </div>
       <div class="debug-area" id="debug-area-running"></div>
     </div>
@@ -81,10 +81,11 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 
   <div id="phase-error" class="hidden">
     <p class="error" id="error-msg"></p>
+    <p class="subtitle hidden" id="error-code"></p>
     <div class="debug-section">
       <div class="debug-header">
         <span class="debug-title">Debug 日志</span>
-        <button class="btn-copy" onclick="copyDebugLogs()">复制日志</button>
+        <button class="btn-copy" onclick="copyDebugLogs(this)">复制日志</button>
       </div>
       <div class="debug-area" id="debug-area-error"></div>
     </div>
@@ -93,10 +94,171 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 </div>
 
 <script>
-let pollTimer = null;
+const CONFIG_CODE_KEY = 'telehand_config_code';
+let currentPhase = 'config';
+let statePollTimer = null;
 let logPollTimer = null;
 let debugPollTimer = null;
 let cachedDebugLogs = [];
+
+function normalizePhase(phase) {
+  return ['config', 'connecting', 'running', 'error'].includes(phase) ? phase : 'config';
+}
+
+function startStatePoller() {
+  if (statePollTimer !== null) return;
+  statePollTimer = setInterval(pollState, 1000);
+}
+
+function startLogPoller() {
+  if (logPollTimer !== null) return;
+  logPollTimer = setInterval(pollLogs, 2000);
+}
+
+function startDebugPoller() {
+  if (debugPollTimer !== null) return;
+  debugPollTimer = setInterval(pollDebugLogs, 1000);
+}
+
+function stopLogPoller() {
+  if (logPollTimer !== null) {
+    clearInterval(logPollTimer);
+    logPollTimer = null;
+  }
+}
+
+function stopDebugPoller() {
+  if (debugPollTimer !== null) {
+    clearInterval(debugPollTimer);
+    debugPollTimer = null;
+  }
+}
+
+function stopAllPollers() {
+  if (statePollTimer !== null) {
+    clearInterval(statePollTimer);
+    statePollTimer = null;
+  }
+  stopLogPoller();
+  stopDebugPoller();
+}
+
+function syncPollersByPhase(phase) {
+  startStatePoller();
+  if (phase === 'running') {
+    startLogPoller();
+    startDebugPoller();
+    return;
+  }
+  if (phase === 'connecting' || phase === 'error') {
+    stopLogPoller();
+    startDebugPoller();
+    return;
+  }
+  stopLogPoller();
+  stopDebugPoller();
+}
+
+function restoreConfigInputFromSession() {
+  try {
+    const cached = sessionStorage.getItem(CONFIG_CODE_KEY);
+    if (cached !== null) {
+      document.getElementById('config-input').value = cached;
+    }
+  } catch (e) {}
+}
+
+function bindConfigInputPersistence() {
+  const input = document.getElementById('config-input');
+  input.addEventListener('input', () => {
+    try {
+      sessionStorage.setItem(CONFIG_CODE_KEY, input.value);
+    } catch (e) {}
+  });
+}
+
+function clearConfigInputSession() {
+  try {
+    sessionStorage.removeItem(CONFIG_CODE_KEY);
+  } catch (e) {}
+}
+
+function renderRunning(state) {
+  const virtIP = state && state.virt_ip ? state.virt_ip : '';
+  const apiPort = state && typeof state.api_port === 'number' ? state.api_port : 0;
+  const endpoint = virtIP && apiPort ? virtIP + ':' + apiPort : '';
+  document.getElementById('virt-ip').textContent = endpoint;
+  document.getElementById('port-info').textContent = endpoint ? ('API 地址: http://' + endpoint) : '';
+}
+
+function renderError(state) {
+  const message = state && state.error ? state.error : '未知错误';
+  document.getElementById('error-msg').textContent = message;
+
+  const codeEl = document.getElementById('error-code');
+  if (state && state.error_code) {
+    codeEl.textContent = '错误码: ' + state.error_code;
+    codeEl.classList.remove('hidden');
+  } else {
+    codeEl.textContent = '';
+    codeEl.classList.add('hidden');
+  }
+}
+
+function setPhase(phase, state) {
+  const normalized = normalizePhase(phase);
+  currentPhase = normalized;
+  showPhase(normalized);
+
+  if (normalized === 'config') {
+    document.getElementById('btn-start').disabled = false;
+    restoreConfigInputFromSession();
+  } else if (normalized === 'running') {
+    renderRunning(state);
+  } else if (normalized === 'error') {
+    renderError(state);
+  }
+
+  syncPollersByPhase(normalized);
+}
+
+function applyServerState(state) {
+  const nextPhase = normalizePhase(state && state.phase);
+  if (nextPhase !== currentPhase) {
+    setPhase(nextPhase, state);
+    return;
+  }
+
+  if (nextPhase === 'running') {
+    renderRunning(state);
+  } else if (nextPhase === 'error') {
+    renderError(state);
+  }
+}
+
+async function hydrateState() {
+  try {
+    const resp = await fetch('/api/state');
+    if (!resp.ok) throw new Error('state request failed');
+    const state = await resp.json();
+    applyServerState(state);
+  } catch (e) {
+    setPhase('config', {});
+  }
+}
+
+async function boot() {
+  bindConfigInputPersistence();
+  restoreConfigInputFromSession();
+  await hydrateState();
+  syncPollersByPhase(currentPhase);
+  if (currentPhase !== 'config') {
+    await pollDebugLogs();
+  }
+  if (currentPhase === 'running') {
+    await pollLogs();
+  }
+}
 
 async function submitConfig() {
   const input = document.getElementById('config-input').value.trim();
@@ -118,9 +280,10 @@ async function submitConfig() {
       btn.disabled = false;
       return;
     }
-    showPhase('connecting');
-    pollTimer = setInterval(pollState, 1000);
-    debugPollTimer = setInterval(pollDebugLogs, 1000);
+    clearConfigInputSession();
+    document.getElementById('config-input').value = '';
+    setPhase('connecting', {phase: 'connecting'});
+    await pollState();
   } catch(e) {
     document.getElementById('config-error').textContent = '连接失败: ' + e.message;
     document.getElementById('config-error').classList.remove('hidden');
@@ -131,18 +294,9 @@ async function submitConfig() {
 async function pollState() {
   try {
     const resp = await fetch('/api/state');
-    const s = await resp.json();
-    if (s.phase === 'running') {
-      clearInterval(pollTimer);
-      document.getElementById('virt-ip').textContent = s.virt_ip + ':' + s.api_port;
-      document.getElementById('port-info').textContent = 'API 地址: http://' + s.virt_ip + ':' + s.api_port;
-      showPhase('running');
-      logPollTimer = setInterval(pollLogs, 2000);
-    } else if (s.phase === 'error' || s.error) {
-      clearInterval(pollTimer);
-      document.getElementById('error-msg').textContent = s.error || '未知错误';
-      showPhase('error');
-    }
+    if (!resp.ok) return;
+    const state = await resp.json();
+    applyServerState(state);
   } catch(e) {}
 }
 
@@ -164,17 +318,17 @@ async function pollLogs() {
 async function pollDebugLogs() {
   try {
     const resp = await fetch('/api/debug-logs');
-    cachedDebugLogs = await resp.json();
+    const logs = await resp.json();
+    cachedDebugLogs = Array.isArray(logs) ? logs : [];
     const areas = document.querySelectorAll('.debug-area');
-    const html = cachedDebugLogs.map(l => escapeHtml(l)).join('\n');
     areas.forEach(a => { a.textContent = cachedDebugLogs.join('\n'); a.scrollTop = a.scrollHeight; });
   } catch(e) {}
 }
 
-function copyDebugLogs() {
+function copyDebugLogs(btn) {
   const text = cachedDebugLogs.join('\n');
   navigator.clipboard.writeText(text).then(() => {
-    const btn = event.target;
+    if (!btn) return;
     const orig = btn.textContent;
     btn.textContent = '已复制';
     setTimeout(() => btn.textContent = orig, 1500);
@@ -182,16 +336,16 @@ function copyDebugLogs() {
 }
 
 async function stopAgent() {
-  if (logPollTimer) clearInterval(logPollTimer);
-  if (debugPollTimer) clearInterval(debugPollTimer);
+  stopAllPollers();
+  clearConfigInputSession();
   try { await fetch('/api/stop', {method:'POST'}); } catch(e) {}
   document.querySelector('.container').innerHTML = '<h1>已断开</h1><p class="subtitle" style="margin-top:12px;">远程协助已结束，可以关闭此页面。</p>';
 }
 
-function copyIP() {
+function copyIP(btn) {
   const text = document.getElementById('virt-ip').textContent;
   navigator.clipboard.writeText(text).then(() => {
-    const btn = event.target;
+    if (!btn) return;
     btn.textContent = '已复制';
     setTimeout(() => btn.textContent = '复制', 1500);
   });
@@ -208,6 +362,8 @@ function escapeHtml(s) {
   d.textContent = s;
   return d.innerHTML;
 }
+
+document.addEventListener('DOMContentLoaded', boot);
 </script>
 </body>
 </html>
