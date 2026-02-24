@@ -423,7 +423,7 @@ func (s *APIServer) handleEdit(w http.ResponseWriter, r *http.Request) {
 
 	data, err := os.ReadFile(req.Path)
 	if err != nil {
-		jsonErr(w, err.Error(), 404)
+		jsonErr(w, err.Error(), 400)
 		return
 	}
 
@@ -469,14 +469,14 @@ func (s *APIServer) handlePatch(w http.ResponseWriter, r *http.Request) {
 
 	data, err := os.ReadFile(req.Path)
 	if err != nil {
-		jsonErr(w, err.Error(), 404)
+		jsonErr(w, err.Error(), 400)
 		return
 	}
 
 	content := string(data)
 	count := strings.Count(content, req.Old)
 	if count == 0 {
-		jsonErr(w, "old text not found", 404)
+		jsonErr(w, "old text not found", 400)
 		return
 	}
 
