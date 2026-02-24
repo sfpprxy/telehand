@@ -26,7 +26,30 @@
 
 `phase` 取值：`config` / `connecting` / `running` / `error`
 
-### 2. 执行命令 `POST /exec`
+- 当 `phase=error` 时，响应会携带 `error` 与 `error_code`，用于自动化判错。
+
+### 2. 提交配置并自动连网 `POST /connect`
+
+在无需 GUI 手工粘贴时，通过 API 提交 base64 配置码，驱动 `config -> connecting -> running`。
+
+**请求**:
+```json
+{
+  "config": "<base64-config>"
+}
+```
+
+**响应**:
+```json
+{
+  "ok": true
+}
+```
+
+- 当实例已在 `connecting/running` 或已有待处理配置时，返回 `HTTP 409`
+- 若预检失败（如 Windows 非管理员），返回 `HTTP 400` 且响应内包含 `error_code`
+
+### 3. 执行命令 `POST /exec`
 
 在远程机器上执行 shell 命令。Windows 使用 PowerShell，macOS 使用默认 shell。
 
@@ -34,7 +57,8 @@
 ```json
 {
   "cmd": "whoami",
-  "cwd": "C:\\Users"  // 可选，工作目录
+  "cwd": "C:\\Users", // 可选，工作目录
+  "timeout_sec": 30      // 可选，默认 30，最大 600
 }
 ```
 
@@ -49,8 +73,54 @@
 
 - `code` 为 0 表示成功，非 0 表示失败
 - `code` 为 -1 表示进程启动失败
+- `code` 为 124 表示命令超时被终止
 
-### 3. 读文件 `POST /read`
+### 4. 二进制上传 `POST /upload`
+
+用于上传二进制文件（如 exe/zip），`data` 使用 base64 编码；支持 `append` 分块上传。
+
+**请求**:
+```json
+{
+  "path": "C:\\Users\\Public\\telehand-dev\\telehand.exe",
+  "data": "<base64-bytes>",
+  "append": false
+}
+```
+
+**响应**:
+```json
+{
+  "ok": true,
+  "bytes": 12345
+}
+```
+
+### 5. 二进制下载 `POST /download`
+
+按 offset/limit 分块下载文件，返回 base64 数据。
+
+**请求**:
+```json
+{
+  "path": "C:\\Users\\Public\\telehand-dev\\telehand.exe",
+  "offset": 0,
+  "limit": 1048576
+}
+```
+
+**响应**:
+```json
+{
+  "data": "<base64-bytes>",
+  "size": 1048576,
+  "total_size": 31870464,
+  "offset": 0,
+  "eof": false
+}
+```
+
+### 6. 读文件 `POST /read`
 
 读取文件内容，支持按行范围读取以节约上下文。
 
@@ -74,7 +144,7 @@
 - 先用 `offset=0, limit=0`（或不传 offset/limit）获取 `total_lines`，再按需分段读取
 - `offset` 是 0-based 行索引
 
-### 4. 写文件 `POST /write`
+### 7. 写文件 `POST /write`
 
 创建或覆盖整个文件。自动创建不存在的父目录。
 
@@ -93,7 +163,7 @@
 }
 ```
 
-### 5. 按行编辑 `POST /edit`
+### 8. 按行编辑 `POST /edit`
 
 替换文件中指定行范围的内容。行号从 1 开始。
 
@@ -121,7 +191,7 @@
 }
 ```
 
-### 6. 查找替换 `POST /patch`
+### 9. 查找替换 `POST /patch`
 
 在文件中查找文本并替换。
 
@@ -156,7 +226,7 @@
 - `old` 支持跨行匹配（用 `\n` 分隔）
 - 若 `old` 未找到，返回 404 错误
 
-### 7. 列目录 `POST /ls`
+### 10. 列目录 `POST /ls`
 
 **请求**:
 ```json
@@ -180,15 +250,30 @@
 所有 API 在出错时返回：
 ```json
 {
-  "error": "错误描述"
+  "error": "错误描述",
+  "error_code": "optional_code"
 }
 ```
 
 HTTP 状态码（业务接口）：
 - 400: 请求参数错误
-- 404: 文件/目录不存在，或 old text 未找到
+- 409: `POST /connect` 状态冲突（已在 connecting/running 或已有待处理配置）
+- 404: `POST /patch` 的 `old` 未找到（仅此场景）
 - 405: HTTP 方法错误（所有接口只接受 POST）
 - 500: 服务器内部错误
+
+常见 `error_code`：
+- `windows_not_admin`: Windows 未以管理员身份运行（连接前预检拒绝）
+- `windows_admin_check_failed`: Windows 管理员权限检测失败
+- `windows_tun_init_failed`: Windows 虚拟网卡（TUN/Wintun/Packet）初始化失败
+- `windows_firewall_blocked`: 疑似被 Windows 防火墙/策略拦截
+- `easytier_start_failed`: EasyTier 启动失败（通用兜底）
+- `easytier_ip_timeout`: 超时未拿到虚拟 IP（通用兜底）
+
+语义约定（避免“业务未命中”和 HTTP 语义混淆）：
+- `POST /read` 文件不存在时，返回 `HTTP 200` + `{"error":"...not found..."}`。
+- `POST /ls` 目录不存在时，返回 `HTTP 200` + `{"error":"...not found..."}`。
+- `POST /download` 文件不存在时，返回 `HTTP 200` + `{"error":"...not found..."}`。
 
 ## 典型工作流
 
@@ -216,7 +301,10 @@ POST /patch {"path": "...", "old": "foo", "new": "bar"}
 ## 注意事项
 
 - Windows 路径使用 `\\` 或 `/`，PowerShell 两种都支持
+- 调试验证优先使用普通目录（如 `C:/Users/Public/telehand-sandbox-*`），避免系统目录（如 `C:/Windows/*`）
 - `/exec` 的 `cmd` 在 Windows 上通过 `powershell.exe -Command` 执行
 - `/exec` 的 `cmd` 在 macOS 上通过默认 shell（通常 zsh）的 `-c` 执行
+- `telehand serve --config <base64>` 可在启动后自动进入连网流程（无需 GUI 手输）
+- `telehand serve --no-browser` 可禁用自动打开浏览器，适合远程无头场景
 - 文件编码统一为 UTF-8
 - `/read` 的 `offset` 是 0-based，`/edit` 的 `start_line` 是 1-based
