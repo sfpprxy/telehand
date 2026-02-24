@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,7 +11,15 @@ import (
 	"time"
 )
 
-func runServe() {
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configStr := fs.String("config", "", "base64 config string to auto-connect")
+	noBrowser := fs.Bool("no-browser", false, "do not auto-open browser")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
 	gui := NewGUIServer(18080)
 	apiPort := 0
 	api := NewAPIServer("0.0.0.0", 8080, func(log CmdLog) {
@@ -18,13 +27,16 @@ func runServe() {
 	}, func() HealthResp {
 		s := gui.GetState()
 		return HealthResp{
-			Status:  "ok",
-			Phase:   s.Phase,
-			VirtIP:  s.VirtIP,
-			APIPort: apiPort,
-			GUIPort: gui.Port(),
-			Error:   s.Error,
+			Status:    "ok",
+			Phase:     s.Phase,
+			VirtIP:    s.VirtIP,
+			APIPort:   apiPort,
+			GUIPort:   gui.Port(),
+			Error:     s.Error,
+			ErrorCode: s.ErrorCode,
 		}
+	}, func(cfg string) error {
+		return gui.SubmitConfigEncoded(cfg)
 	})
 	if err := api.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to start API server: %v\n", err)
@@ -41,7 +53,19 @@ func runServe() {
 	gui.SetState(GUIState{Phase: "config", APIPort: apiPort})
 	guiURL := fmt.Sprintf("http://127.0.0.1:%d", gui.Port())
 	fmt.Printf("GUI started at %s\n", guiURL)
-	openBrowser(guiURL)
+
+	if !*noBrowser {
+		openBrowser(guiURL)
+	}
+
+	if *configStr != "" {
+		if err := gui.SubmitConfigEncoded(*configStr); err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid --config: %v\n", err)
+			api.Stop()
+			gui.Stop()
+			os.Exit(1)
+		}
+	}
 
 	cfg := gui.WaitForConfig()
 	if cfg == nil {
@@ -56,10 +80,12 @@ func runServe() {
 		gui.AddDebugLog(line)
 	})
 	if err := et.Start(cfg); err != nil {
+		errCode := classifyEasyTierError(err, et.Logs(), ErrorCodeEasyTierStartFailed)
 		gui.SetState(GUIState{
-			Phase:   "error",
-			APIPort: apiPort,
-			Error:   fmt.Sprintf("EasyTier failed: %v", err),
+			Phase:     "error",
+			APIPort:   apiPort,
+			Error:     fmt.Sprintf("EasyTier failed: %v", err),
+			ErrorCode: errCode,
 		})
 		fmt.Fprintf(os.Stderr, "EasyTier failed: %v\n", err)
 		waitForSignal()
@@ -71,10 +97,19 @@ func runServe() {
 
 	ip, err := et.WaitForIP(30 * time.Second)
 	if err != nil {
+		errCode := classifyEasyTierError(err, et.Logs(), ErrorCodeEasyTierIPTimeout)
+		errMsg := "Failed to get virtual IP (timeout 30s)"
+		switch errCode {
+		case ErrorCodeWindowsTUNInitFailed:
+			errMsg = "Failed to initialize Windows virtual adapter (TUN)"
+		case ErrorCodeWindowsFirewallBlocked:
+			errMsg = "EasyTier traffic may be blocked by Windows firewall policy"
+		}
 		gui.SetState(GUIState{
-			Phase:   "error",
-			APIPort: apiPort,
-			Error:   "Failed to get virtual IP (timeout 30s)",
+			Phase:     "error",
+			APIPort:   apiPort,
+			Error:     fmt.Sprintf("%s: %v", errMsg, err),
+			ErrorCode: errCode,
 		})
 		fmt.Fprintf(os.Stderr, "Failed to get virtual IP: %v\n", err)
 		waitForSignal()

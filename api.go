@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,14 +20,15 @@ import (
 )
 
 type APIServer struct {
-	port     int
-	bindIP   string
-	listener net.Listener
-	mux      *http.ServeMux
-	mu       sync.Mutex
-	cmdLogs  []CmdLog
-	onLog    func(CmdLog)
-	healthFn func() HealthResp
+	port      int
+	bindIP    string
+	listener  net.Listener
+	mux       *http.ServeMux
+	mu        sync.Mutex
+	cmdLogs   []CmdLog
+	onLog     func(CmdLog)
+	healthFn  func() HealthResp
+	connectFn func(string) error
 }
 
 type CmdLog struct {
@@ -37,12 +39,13 @@ type CmdLog struct {
 }
 
 type HealthResp struct {
-	Status  string `json:"status"`
-	Phase   string `json:"phase"`
-	VirtIP  string `json:"virt_ip,omitempty"`
-	APIPort int    `json:"api_port,omitempty"`
-	GUIPort int    `json:"gui_port,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Status    string `json:"status"`
+	Phase     string `json:"phase"`
+	VirtIP    string `json:"virt_ip,omitempty"`
+	APIPort   int    `json:"api_port,omitempty"`
+	GUIPort   int    `json:"gui_port,omitempty"`
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 type ExecReq struct {
@@ -55,6 +58,10 @@ type ExecResp struct {
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
 	Code   int    `json:"code"`
+}
+
+type ConnectReq struct {
+	Config string `json:"config"`
 }
 
 type ReadReq struct {
@@ -132,15 +139,17 @@ type DownloadResp struct {
 	EOF       bool   `json:"eof"`
 }
 
-func NewAPIServer(bindIP string, startPort int, onLog func(CmdLog), healthFn func() HealthResp) *APIServer {
+func NewAPIServer(bindIP string, startPort int, onLog func(CmdLog), healthFn func() HealthResp, connectFn func(string) error) *APIServer {
 	s := &APIServer{
-		bindIP:   bindIP,
-		port:     startPort,
-		onLog:    onLog,
-		healthFn: healthFn,
+		bindIP:    bindIP,
+		port:      startPort,
+		onLog:     onLog,
+		healthFn:  healthFn,
+		connectFn: connectFn,
 	}
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/connect", s.wrap(s.handleConnect))
 	s.mux.HandleFunc("/exec", s.wrap(s.handleExec))
 	s.mux.HandleFunc("/read", s.wrap(s.handleRead))
 	s.mux.HandleFunc("/write", s.wrap(s.handleWrite))
@@ -227,8 +236,16 @@ func (s *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func jsonErr(w http.ResponseWriter, msg string, code int) {
+	jsonErrWithCode(w, msg, "", code)
+}
+
+func jsonErrWithCode(w http.ResponseWriter, msg string, errCode string, code int) {
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	resp := map[string]string{"error": msg}
+	if errCode != "" {
+		resp["error_code"] = errCode
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *APIServer) handleExec(w http.ResponseWriter, r *http.Request) {
@@ -285,6 +302,35 @@ func (s *APIServer) handleExec(w http.ResponseWriter, r *http.Request) {
 		Stderr: stderr.String(),
 		Code:   code,
 	})
+}
+
+func (s *APIServer) handleConnect(w http.ResponseWriter, r *http.Request) {
+	if s.connectFn == nil {
+		jsonErr(w, "connect is not supported", 500)
+		return
+	}
+
+	var req ConnectReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid request body", 400)
+		return
+	}
+	if req.Config == "" {
+		jsonErr(w, "config is required", 400)
+		return
+	}
+	if err := s.connectFn(req.Config); err != nil {
+		errCode := errorCodeOf(err)
+		statusCode := 400
+		switch {
+		case errors.Is(err, ErrConfigPending), errors.Is(err, ErrAlreadyConnecting), errors.Is(err, ErrAlreadyRunning):
+			statusCode = 409
+		}
+		jsonErrWithCode(w, err.Error(), errCode, statusCode)
+		return
+	}
+	s.addLog("POST", "/connect", "submitted config")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *APIServer) handleRead(w http.ResponseWriter, r *http.Request) {

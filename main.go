@@ -11,12 +11,12 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		runServe()
+		runServe(os.Args[2:])
 		return
 	}
 	// default: serve mode (for double-click)
 	if len(os.Args) == 1 {
-		runServe()
+		runServe(nil)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "Usage:\n  agent serve          Start remote assist agent (default)\n  agent gen-config     Generate config string\n")

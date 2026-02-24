@@ -3,10 +3,12 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net"
 	"net/http"
+	"runtime"
 	"sync"
 )
 
@@ -25,11 +27,18 @@ type GUIServer struct {
 }
 
 type GUIState struct {
-	Phase   string `json:"phase"` // "config" | "connecting" | "running"
-	VirtIP  string `json:"virt_ip,omitempty"`
-	APIPort int    `json:"api_port,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Phase     string `json:"phase"` // "config" | "connecting" | "running"
+	VirtIP    string `json:"virt_ip,omitempty"`
+	APIPort   int    `json:"api_port,omitempty"`
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 }
+
+var (
+	ErrConfigPending     = errors.New("config already pending")
+	ErrAlreadyConnecting = errors.New("already connecting")
+	ErrAlreadyRunning    = errors.New("already running")
+)
 
 func NewGUIServer(startPort int) *GUIServer {
 	g := &GUIServer{
@@ -98,6 +107,70 @@ func (g *GUIServer) Stop() {
 	}
 }
 
+func (g *GUIServer) SubmitConfigEncoded(encoded string) error {
+	cfg, err := DecodeConfig(encoded)
+	if err != nil {
+		return err
+	}
+	return g.SubmitConfig(cfg)
+}
+
+func (g *GUIServer) SubmitConfig(cfg *Config) error {
+	state := g.GetState()
+	switch state.Phase {
+	case "connecting":
+		return ErrAlreadyConnecting
+	case "running":
+		return ErrAlreadyRunning
+	}
+	if len(g.configCh) > 0 {
+		return ErrConfigPending
+	}
+	if err := precheckBeforeConnect(cfg); err != nil {
+		state.Phase = "error"
+		state.VirtIP = ""
+		state.Error = err.Error()
+		state.ErrorCode = errorCodeOf(err)
+		g.SetState(state)
+		return err
+	}
+	select {
+	case g.configCh <- cfg:
+		state.Phase = "connecting"
+		state.VirtIP = ""
+		state.Error = ""
+		state.ErrorCode = ""
+		g.SetState(state)
+		return nil
+	default:
+		return ErrConfigPending
+	}
+}
+
+func precheckBeforeConnect(cfg *Config) error {
+	if cfg == nil {
+		return errors.New("config is required")
+	}
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	isAdmin, err := isCurrentUserAdmin()
+	if err != nil {
+		return newCodedError(
+			ErrorCodeWindowsAdminCheckFail,
+			fmt.Sprintf("failed to check administrator privilege: %v", err),
+		)
+	}
+	if !isAdmin {
+		return newCodedError(
+			ErrorCodeWindowsNotAdmin,
+			"administrator privileges required on Windows; please run telehand as administrator",
+		)
+	}
+	return nil
+}
+
 func (g *GUIServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	data, _ := guiFS.ReadFile("gui.html")
 	tmpl, err := template.New("gui").Parse(string(data))
@@ -120,17 +193,18 @@ func (g *GUIServer) handleSubmitConfig(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, 400, map[string]string{"error": "invalid request"})
 		return
 	}
-	cfg, err := DecodeConfig(body.Config)
-	if err != nil {
-		jsonResp(w, 400, map[string]string{"error": err.Error()})
+	if err := g.SubmitConfigEncoded(body.Config); err != nil {
+		code := 400
+		if errors.Is(err, ErrConfigPending) || errors.Is(err, ErrAlreadyConnecting) || errors.Is(err, ErrAlreadyRunning) {
+			code = 409
+		}
+		resp := map[string]string{"error": err.Error()}
+		if errCode := errorCodeOf(err); errCode != "" {
+			resp["error_code"] = errCode
+		}
+		jsonResp(w, code, resp)
 		return
 	}
-	state := g.GetState()
-	state.Phase = "connecting"
-	state.VirtIP = ""
-	state.Error = ""
-	g.SetState(state)
-	g.configCh <- cfg
 	jsonResp(w, 200, map[string]string{"ok": "true"})
 }
 

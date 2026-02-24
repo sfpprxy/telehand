@@ -58,7 +58,7 @@ func callRaw(t *testing.T, client *http.Client, method, url string, body any) (i
 }
 
 func TestAPIServerObserve(t *testing.T) {
-	s := NewAPIServer("127.0.0.1", 19080, nil, nil)
+	s := NewAPIServer("127.0.0.1", 19080, nil, nil, nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start api server failed: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestAPIServerObserve(t *testing.T) {
 }
 
 func TestReadAndLsNotFoundReturn200WithError(t *testing.T) {
-	s := NewAPIServer("127.0.0.1", 19180, nil, nil)
+	s := NewAPIServer("127.0.0.1", 19180, nil, nil, nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start api server failed: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestReadAndLsNotFoundReturn200WithError(t *testing.T) {
 }
 
 func TestExecTimeout(t *testing.T) {
-	s := NewAPIServer("127.0.0.1", 19280, nil, nil)
+	s := NewAPIServer("127.0.0.1", 19280, nil, nil, nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start api server failed: %v", err)
 	}
@@ -244,8 +244,85 @@ func TestExecTimeout(t *testing.T) {
 	}
 }
 
+func TestConnectEndpoint(t *testing.T) {
+	var got string
+	s := NewAPIServer("127.0.0.1", 19380, nil, nil, func(cfg string) error {
+		got = cfg
+		return nil
+	})
+	if err := s.Start(); err != nil {
+		t.Fatalf("start api server failed: %v", err)
+	}
+	defer s.Stop()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", s.Port())
+	client := &http.Client{Timeout: 8 * time.Second}
+	status, out := callRaw(t, client, http.MethodPost, base+"/connect", ConnectReq{Config: "abc"})
+	if status != 200 {
+		t.Fatalf("POST /connect status=%d body=%s", status, string(out))
+	}
+	if got != "abc" {
+		t.Fatalf("connect callback not called, got=%q", got)
+	}
+}
+
+func TestConnectEndpointReturnsErrorCode(t *testing.T) {
+	s := NewAPIServer("127.0.0.1", 19480, nil, nil, func(cfg string) error {
+		return newCodedError(ErrorCodeWindowsNotAdmin, "administrator privileges required")
+	})
+	if err := s.Start(); err != nil {
+		t.Fatalf("start api server failed: %v", err)
+	}
+	defer s.Stop()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", s.Port())
+	client := &http.Client{Timeout: 8 * time.Second}
+	status, out := callRaw(t, client, http.MethodPost, base+"/connect", ConnectReq{Config: "abc"})
+	if status != 400 {
+		t.Fatalf("POST /connect status=%d body=%s", status, string(out))
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("unmarshal failed: %v body=%s", err, string(out))
+	}
+	if body["error_code"] != ErrorCodeWindowsNotAdmin {
+		t.Fatalf("expected error_code=%q, got=%q body=%s", ErrorCodeWindowsNotAdmin, body["error_code"], string(out))
+	}
+}
+
+func TestHealthIncludesErrorCode(t *testing.T) {
+	s := NewAPIServer("127.0.0.1", 19580, nil, func() HealthResp {
+		return HealthResp{
+			Status:    "ok",
+			Phase:     "error",
+			Error:     "administrator privileges required",
+			ErrorCode: ErrorCodeWindowsNotAdmin,
+		}
+	}, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("start api server failed: %v", err)
+	}
+	defer s.Stop()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", s.Port())
+	client := &http.Client{Timeout: 8 * time.Second}
+	status, out := callRaw(t, client, http.MethodGet, base+"/health", nil)
+	if status != 200 {
+		t.Fatalf("GET /health status=%d body=%s", status, string(out))
+	}
+
+	var health HealthResp
+	if err := json.Unmarshal(out, &health); err != nil {
+		t.Fatalf("unmarshal failed: %v body=%s", err, string(out))
+	}
+	if health.ErrorCode != ErrorCodeWindowsNotAdmin {
+		t.Fatalf("expected health error_code=%q, got=%q", ErrorCodeWindowsNotAdmin, health.ErrorCode)
+	}
+}
+
 func TestUploadAndDownload(t *testing.T) {
-	s := NewAPIServer("127.0.0.1", 19680, nil, nil)
+	s := NewAPIServer("127.0.0.1", 19680, nil, nil, nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("start api server failed: %v", err)
 	}
