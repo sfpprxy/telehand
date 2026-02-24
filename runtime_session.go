@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -35,20 +36,28 @@ func runSession(opts sessionOptions) int {
 	})
 
 	var (
-		runtimeMu sync.RWMutex
-		runtimeET *EasyTier
+		runtimeMu      sync.RWMutex
+		runtimeET      *EasyTier
+		runtimeNetHash string
 	)
 	gui.SetPeerInfoProvider(func() (PeerInfoSnapshot, error) {
 		runtimeMu.RLock()
 		et := runtimeET
+		networkHash := runtimeNetHash
 		runtimeMu.RUnlock()
 		if et == nil {
 			return PeerInfoSnapshot{
-				UpdatedAt: time.Now().Format(time.RFC3339),
-				Peers:     []PeerInfo{},
+				UpdatedAt:   time.Now().Format(time.RFC3339),
+				NetworkHash: networkHash,
+				Peers:       []PeerInfo{},
 			}, nil
 		}
-		return et.QueryPeerInfo(role)
+		snapshot, err := et.QueryPeerInfo(role)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.NetworkHash = networkHash
+		return snapshot, nil
 	})
 
 	submitFn := func(encoded string) error {
@@ -123,13 +132,48 @@ func runSession(opts sessionOptions) int {
 	fmt.Printf("Network ready: name=%s secret=%s peers=%s\n", cfg.NetworkName, maskSecret(cfg.NetworkSecret), strings.Join(cfg.Peers, ","))
 	fmt.Printf("State: initializing -> connecting (%s)\n", role)
 
-	const maxAttempts = 2
+	networkHash := computeNetworkHash(cfg.NetworkName, cfg.NetworkSecret)
+	state = gui.GetState()
+	state.NetworkHash = networkHash
+	gui.SetState(state)
+	runtimeMu.Lock()
+	runtimeNetHash = networkHash
+	runtimeMu.Unlock()
+
+	usedNets, precheckErr := collectLocalIPv4Nets()
+	if precheckErr != nil {
+		msg := fmt.Sprintf("[telehand] startup precheck warning: collect local networks failed: %v", precheckErr)
+		gui.AddDebugLog(msg)
+		if cliOnly {
+			fmt.Println(msg)
+		}
+	}
+	candidates := chooseCandidates(networkHash, role, usedNets)
+	if len(candidates) == 0 {
+		errCode := ErrorCodeRouteConflictDetected
+		errMsg := formatConnectError(errCode, fmt.Errorf("no available subnet candidates"))
+		setSessionError(gui, apiPort, errCode, errMsg)
+		fmt.Fprintln(os.Stderr, errMsg)
+		api.Stop()
+		gui.Stop()
+		return exitCodeFromErrorCode(errCode, ExitCodeNetwork)
+	}
+
 	var (
 		activeET *EasyTier
 		virtIP   string
+		baseline SessionBaseline
+		lastErr  error
+		lastCode string
 	)
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt, candidate := range candidates {
+		msg := fmt.Sprintf("[telehand] startup candidate %d/%d subnet=%s local=%s", attempt+1, len(candidates), candidate.SubnetCIDR, candidate.LocalCIDR)
+		gui.AddDebugLog(msg)
+		if cliOnly {
+			fmt.Println(msg)
+		}
+
 		activeET = NewEasyTier(func(line string) {
 			sanitized := sanitizeSensitiveLog(line, cfg.NetworkSecret)
 			gui.AddDebugLog(sanitized)
@@ -141,37 +185,75 @@ func runSession(opts sessionOptions) int {
 		runtimeET = activeET
 		runtimeMu.Unlock()
 
-		if err := activeET.Start(cfg); err != nil {
+		if err := activeET.Start(cfg, EasyTierStartOptions{IPv4CIDR: candidate.LocalCIDR}); err != nil {
 			errCode := classifyEasyTierError(err, activeET.Logs(), ErrorCodeEasyTierStartFailed)
-			setSessionError(gui, apiPort, errCode, fmt.Sprintf("EasyTier failed: %v", err))
-			fmt.Fprintf(os.Stderr, "EasyTier failed: %v\n", err)
-			api.Stop()
-			gui.Stop()
-			return exitCodeFromErrorCode(errCode, ExitCodeService)
-		}
-
-		ip, err := activeET.WaitForIP(30 * time.Second)
-		if err == nil {
-			virtIP = ip
-			break
-		}
-
-		errCode := classifyEasyTierError(err, activeET.Logs(), ErrorCodeEasyTierIPTimeout)
-		activeET.Stop()
-		if isRetryableNetworkError(errCode) && attempt < maxAttempts {
-			msg := fmt.Sprintf("Connect failed (%s), retrying...", errCode)
-			fmt.Fprintln(os.Stderr, msg)
-			setSessionError(gui, apiPort, errCode, msg)
-			time.Sleep(2 * time.Second)
-			state = gui.GetState()
-			state.Phase = "connecting"
-			state.Error = ""
-			state.ErrorCode = ""
-			gui.SetState(state)
+			lastErr = err
+			lastCode = errCode
+			if errCode == ErrorCodeTUNPermissionDenied || errCode == ErrorCodeAuthFailed {
+				break
+			}
 			continue
 		}
 
-		errMsg := formatConnectError(errCode, err)
+		ip, err := activeET.WaitForIP(30 * time.Second)
+		if err != nil {
+			errCode := classifyEasyTierError(err, activeET.Logs(), ErrorCodeEasyTierIPTimeout)
+			lastErr = err
+			lastCode = errCode
+			activeET.Stop()
+			if !isRetryableNetworkError(errCode) {
+				break
+			}
+			continue
+		}
+
+		virtIP = ip
+		tunDevice, devErr := interfaceByIPv4(virtIP)
+		if devErr != nil {
+			lastErr = devErr
+			lastCode = ErrorCodeRouteConflictDetected
+			activeET.Stop()
+			continue
+		}
+		baseline = SessionBaseline{
+			TunDevice:   tunDevice,
+			VirtualCIDR: candidate.SubnetCIDR,
+			NetworkHash: networkHash,
+		}
+
+		if shouldCheckRouteOwnership() {
+			routeIface, routeErr := routeInterfaceForTarget(candidate.ExpectedPeerIP)
+			if routeErr != nil {
+				lastErr = routeErr
+				lastCode = ErrorCodeRouteConflictDetected
+				activeET.Stop()
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(routeIface), strings.TrimSpace(tunDevice)) {
+				lastErr = fmt.Errorf("route mismatch: target=%s route_if=%s tun_if=%s", candidate.ExpectedPeerIP, routeIface, tunDevice)
+				lastCode = ErrorCodeRouteConflictDetected
+				activeET.Stop()
+				continue
+			}
+		}
+
+		lastErr = nil
+		lastCode = ""
+		break
+	}
+
+	if virtIP == "" {
+		errCode := lastCode
+		if errCode == "" {
+			errCode = ErrorCodeRouteConflictDetected
+		}
+		if errCode != ErrorCodeRouteConflictDetected && len(candidates) > 1 {
+			errCode = ErrorCodeRouteConflictDetected
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("subnet candidate exhausted")
+		}
+		errMsg := formatConnectError(errCode, lastErr)
 		setSessionError(gui, apiPort, errCode, errMsg)
 		fmt.Fprintln(os.Stderr, errMsg)
 		api.Stop()
@@ -180,6 +262,7 @@ func runSession(opts sessionOptions) int {
 	}
 
 	fmt.Printf("EasyTier virtual IP: %s\n", virtIP)
+	fmt.Printf("Session baseline: tun=%s subnet=%s network_hash=%s\n", baseline.TunDevice, baseline.VirtualCIDR, baseline.NetworkHash)
 	state = gui.GetState()
 	state.Phase = "running"
 	state.VirtIP = virtIP
@@ -193,11 +276,17 @@ func runSession(opts sessionOptions) int {
 	go printPeerInfoLoop(stopPeerPrint, func() (PeerInfoSnapshot, error) {
 		runtimeMu.RLock()
 		et := runtimeET
+		networkHash := runtimeNetHash
 		runtimeMu.RUnlock()
 		if et == nil {
 			return PeerInfoSnapshot{}, errors.New("peer info unavailable")
 		}
-		return et.QueryPeerInfo(role)
+		snapshot, err := et.QueryPeerInfo(role)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.NetworkHash = networkHash
+		return snapshot, nil
 	})
 
 	sig := make(chan os.Signal, 1)
@@ -237,6 +326,8 @@ func formatConnectError(code string, err error) string {
 		return "Failed to connect: TUN permission denied (please run with administrator/root privilege)"
 	case ErrorCodeEasyTierIPTimeout:
 		return "Failed to connect: timeout waiting for virtual IP"
+	case ErrorCodeRouteConflictDetected:
+		return "Failed to connect: route/subnet conflict detected before running"
 	default:
 		return base
 	}
@@ -253,13 +344,17 @@ func isRetryableNetworkError(code string) bool {
 
 func exitCodeFromErrorCode(code string, fallback int) int {
 	switch code {
-	case ErrorCodeEasyTierIPTimeout, ErrorCodeAuthFailed, ErrorCodePeerUnreachable, ErrorCodeWindowsFirewallBlocked:
+	case ErrorCodeEasyTierIPTimeout, ErrorCodeAuthFailed, ErrorCodePeerUnreachable, ErrorCodeWindowsFirewallBlocked, ErrorCodeRouteConflictDetected:
 		return ExitCodeNetwork
 	case ErrorCodeEasyTierStartFailed, ErrorCodeWindowsTUNInitFailed, ErrorCodeWindowsAdminCheckFail, ErrorCodeWindowsNotAdmin, ErrorCodeTUNPermissionDenied:
 		return ExitCodeService
 	default:
 		return fallback
 	}
+}
+
+func shouldCheckRouteOwnership() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 }
 
 func printPeerInfoLoop(stop <-chan struct{}, fetch func() (PeerInfoSnapshot, error)) {
@@ -289,7 +384,11 @@ func printPeerInfoLoop(stop <-chan struct{}, fetch func() (PeerInfoSnapshot, err
 }
 
 func printPeerSnapshot(snapshot PeerInfoSnapshot) {
-	fmt.Printf("\nPeer Info (%s)\n", snapshot.UpdatedAt)
+	title := "Peer Info"
+	if strings.TrimSpace(snapshot.NetworkHash) != "" {
+		title += fmt.Sprintf(" (网络名称:%s)", snapshot.NetworkHash)
+	}
+	fmt.Printf("\n%s (%s)\n", title, snapshot.UpdatedAt)
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "Virtual IPv4\tHostname\tRoute Cost\tProtocol\tLatency\tUpload\tDownload\tLoss Rate\tVersion\tRole\tLocal")
 	for _, p := range snapshot.Peers {

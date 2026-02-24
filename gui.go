@@ -30,6 +30,7 @@ type GUIServer struct {
 type GUIState struct {
 	Phase            string           `json:"phase"` // "config" | "connecting" | "running" | "error"
 	Role             string           `json:"role,omitempty"`
+	NetworkHash      string           `json:"network_hash,omitempty"`
 	VirtIP           string           `json:"virt_ip,omitempty"`
 	APIPort          int              `json:"api_port,omitempty"`
 	Error            string           `json:"error,omitempty"`

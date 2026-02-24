@@ -26,6 +26,11 @@ type EasyTier struct {
 	onLog   func(string)
 }
 
+type EasyTierStartOptions struct {
+	IPv4CIDR string
+	DevName  string
+}
+
 func NewEasyTier(onLog func(string)) *EasyTier {
 	return &EasyTier{onLog: onLog, rpcPort: allocateRPCPort()}
 }
@@ -68,7 +73,7 @@ func ensureWindowsRuntimeDLLs(dir string) error {
 	return nil
 }
 
-func (et *EasyTier) Start(cfg *Config) error {
+func (et *EasyTier) Start(cfg *Config, opts EasyTierStartOptions) error {
 	dir, err := os.MkdirTemp("", "telehand-et-")
 	if err != nil {
 		return err
@@ -97,12 +102,19 @@ func (et *EasyTier) Start(cfg *Config) error {
 	}
 
 	args := []string{
-		"--dhcp",
 		"--network-name", cfg.NetworkName,
 		"--network-secret", cfg.NetworkSecret,
 		"-l", "tcp://0.0.0.0:0",
 		"-l", "udp://0.0.0.0:0",
 		"-r", fmt.Sprintf("127.0.0.1:%s", et.rpcPort),
+	}
+	if strings.TrimSpace(opts.IPv4CIDR) != "" {
+		args = append(args, "--ipv4", strings.TrimSpace(opts.IPv4CIDR))
+	} else {
+		args = append(args, "--dhcp")
+	}
+	if strings.TrimSpace(opts.DevName) != "" {
+		args = append(args, "--dev-name", strings.TrimSpace(opts.DevName))
 	}
 	for _, p := range cfg.Peers {
 		args = append(args, "--peers", p)
@@ -176,8 +188,9 @@ type PeerInfo struct {
 }
 
 type PeerInfoSnapshot struct {
-	UpdatedAt string     `json:"updated_at"`
-	Peers     []PeerInfo `json:"peers"`
+	UpdatedAt   string     `json:"updated_at"`
+	NetworkHash string     `json:"network_hash,omitempty"`
+	Peers       []PeerInfo `json:"peers"`
 }
 
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
@@ -284,6 +297,7 @@ func (et *EasyTier) QueryPeerInfo(role string) (PeerInfoSnapshot, error) {
 		if virtualIP == "" && strings.EqualFold(strings.TrimSpace(p.Hostname), strings.TrimSpace(node.Hostname)) {
 			virtualIP = selfIP
 		}
+		isSelf := p.PeerID != "" && p.PeerID == selfID
 		peers = append(peers, PeerInfo{
 			VirtualIPv4: valueOrDash(virtualIP),
 			Hostname:    valueOrDash(p.Hostname),
@@ -294,8 +308,8 @@ func (et *EasyTier) QueryPeerInfo(role string) (PeerInfoSnapshot, error) {
 			Download:    valueOrDash(p.Download),
 			LossRate:    valueOrDash(p.LossRate),
 			Version:     valueOrDash(p.Version),
-			Role:        peerRole,
-			IsSelf:      p.PeerID != "" && p.PeerID == selfID,
+			Role:        displayedRoleForPeer(isSelf, peerRole),
+			IsSelf:      isSelf,
 			PeerID:      p.PeerID,
 		})
 	}
@@ -358,6 +372,13 @@ func normalizeRoleLabel(role string) string {
 		}
 		return strings.TrimSpace(role)
 	}
+}
+
+func displayedRoleForPeer(isSelf bool, sessionRole string) string {
+	if !isSelf {
+		return "-"
+	}
+	return normalizeRoleLabel(sessionRole)
 }
 
 func (et *EasyTier) Logs() []string {

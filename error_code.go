@@ -17,6 +17,7 @@ const (
 	ErrorCodeConfigExpired          = "config_expired"
 	ErrorCodeAuthFailed             = "auth_failed"
 	ErrorCodePeerUnreachable        = "peer_unreachable"
+	ErrorCodeRouteConflictDetected  = "route_conflict_detected"
 )
 
 type codedError struct {

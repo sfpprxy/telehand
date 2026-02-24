@@ -103,7 +103,7 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 
     <div class="peer-section">
       <div class="peer-header">
-        <span class="peer-title">Peer Info</span>
+        <span class="peer-title" id="peer-title">Peer Info</span>
         <span class="peer-updated" id="peer-updated">-</span>
       </div>
       <div class="peer-wrap">
@@ -269,12 +269,23 @@ function clearConfigInputSession() {
 function renderRole(state) {
   const role = state && state.role ? state.role : 'unknown';
   document.getElementById('role-subtitle').textContent = '角色: ' + role;
+  updatePeerTitle(state && state.network_hash ? String(state.network_hash) : '');
   const hint = document.getElementById('running-hint');
   if (role === 'client') {
     hint.textContent = '控制端已连接，请把下方命令发给被控端执行。';
   } else {
     hint.textContent = '请将上方 IP 发送给对方';
   }
+}
+
+function updatePeerTitle(networkHash) {
+  const title = document.getElementById('peer-title');
+  const hash = networkHash ? String(networkHash).trim() : '';
+  if (!hash) {
+    title.textContent = 'Peer Info';
+    return;
+  }
+  title.textContent = 'Peer Info (网络名称:' + hash + ')';
 }
 
 function renderRunning(state) {
@@ -416,6 +427,9 @@ function applyServerState(state) {
 }
 
 function renderPeerInfo(snapshot) {
+  const hashFromSnapshot = snapshot && snapshot.network_hash ? String(snapshot.network_hash) : '';
+  const hashFromState = currentState && currentState.network_hash ? String(currentState.network_hash) : '';
+  updatePeerTitle(hashFromSnapshot || hashFromState);
   const body = document.getElementById('peer-table-body');
   if (!snapshot || !Array.isArray(snapshot.peers) || snapshot.peers.length === 0) {
     body.innerHTML = '<tr><td colspan="11" class="peer-hint">等待网络数据...</td></tr>';
