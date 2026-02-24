@@ -2,8 +2,11 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -43,8 +46,9 @@ type HealthResp struct {
 }
 
 type ExecReq struct {
-	Cmd string `json:"cmd"`
-	Cwd string `json:"cwd,omitempty"`
+	Cmd        string `json:"cmd"`
+	Cwd        string `json:"cwd,omitempty"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
 }
 
 type ExecResp struct {
@@ -103,6 +107,31 @@ type LsResp struct {
 	Entries []LsEntry `json:"entries"`
 }
 
+type UploadReq struct {
+	Path   string `json:"path"`
+	Data   string `json:"data"`
+	Append bool   `json:"append,omitempty"`
+}
+
+type UploadResp struct {
+	OK    bool `json:"ok"`
+	Bytes int  `json:"bytes"`
+}
+
+type DownloadReq struct {
+	Path   string `json:"path"`
+	Offset int64  `json:"offset,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+type DownloadResp struct {
+	Data      string `json:"data"`
+	Size      int    `json:"size"`
+	TotalSize int64  `json:"total_size"`
+	Offset    int64  `json:"offset"`
+	EOF       bool   `json:"eof"`
+}
+
 func NewAPIServer(bindIP string, startPort int, onLog func(CmdLog), healthFn func() HealthResp) *APIServer {
 	s := &APIServer{
 		bindIP:   bindIP,
@@ -118,6 +147,8 @@ func NewAPIServer(bindIP string, startPort int, onLog func(CmdLog), healthFn fun
 	s.mux.HandleFunc("/edit", s.wrap(s.handleEdit))
 	s.mux.HandleFunc("/patch", s.wrap(s.handlePatch))
 	s.mux.HandleFunc("/ls", s.wrap(s.handleLs))
+	s.mux.HandleFunc("/upload", s.wrap(s.handleUpload))
+	s.mux.HandleFunc("/download", s.wrap(s.handleDownload))
 	return s
 }
 
@@ -210,9 +241,18 @@ func (s *APIServer) handleExec(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "cmd is required", 400)
 		return
 	}
+	timeout := req.TimeoutSec
+	if timeout <= 0 {
+		timeout = 30
+	}
+	if timeout > 600 {
+		timeout = 600
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeout)*time.Second)
+	defer cancel()
 
 	shell, flag := getShell()
-	cmd := exec.Command(shell, flag, req.Cmd)
+	cmd := exec.CommandContext(ctx, shell, flag, req.Cmd)
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
 	}
@@ -224,11 +264,19 @@ func (s *APIServer) handleExec(w http.ResponseWriter, r *http.Request) {
 	err := cmd.Run()
 	code := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if ctx.Err() == context.DeadlineExceeded {
+			if stderr.Len() > 0 && !strings.HasSuffix(stderr.String(), "\n") {
+				stderr.WriteString("\n")
+			}
+			stderr.WriteString(fmt.Sprintf("command timed out after %ds", timeout))
+			code = 124
+		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			code = exitErr.ExitCode()
 		} else {
 			code = -1
 		}
+	} else {
+		code = 0
 	}
 
 	s.addLog("POST", "/exec", truncate(req.Cmd, 80))
@@ -252,7 +300,12 @@ func (s *APIServer) handleRead(w http.ResponseWriter, r *http.Request) {
 
 	f, err := os.Open(req.Path)
 	if err != nil {
-		jsonErr(w, err.Error(), 404)
+		if os.IsNotExist(err) {
+			// Keep transport success and report a business-level miss via payload.
+			jsonErr(w, err.Error(), 200)
+			return
+		}
+		jsonErr(w, err.Error(), 500)
 		return
 	}
 	defer f.Close()
@@ -421,7 +474,12 @@ func (s *APIServer) handleLs(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := os.ReadDir(req.Path)
 	if err != nil {
-		jsonErr(w, err.Error(), 404)
+		if os.IsNotExist(err) {
+			// Keep transport success and report a business-level miss via payload.
+			jsonErr(w, err.Error(), 200)
+			return
+		}
+		jsonErr(w, err.Error(), 500)
 		return
 	}
 
@@ -441,6 +499,117 @@ func (s *APIServer) handleLs(w http.ResponseWriter, r *http.Request) {
 
 	s.addLog("POST", "/ls", truncate(req.Path, 80))
 	json.NewEncoder(w).Encode(LsResp{Entries: result})
+}
+
+func (s *APIServer) handleUpload(w http.ResponseWriter, r *http.Request) {
+	var req UploadReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid request body", 400)
+		return
+	}
+	if req.Path == "" || req.Data == "" {
+		jsonErr(w, "path and data are required", 400)
+		return
+	}
+
+	data, err := base64.StdEncoding.DecodeString(req.Data)
+	if err != nil {
+		jsonErr(w, "data must be base64", 400)
+		return
+	}
+
+	dir := filepath.Dir(req.Path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		jsonErr(w, err.Error(), 500)
+		return
+	}
+
+	if req.Append {
+		f, err := os.OpenFile(req.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			jsonErr(w, err.Error(), 500)
+			return
+		}
+		defer f.Close()
+		if _, err := f.Write(data); err != nil {
+			jsonErr(w, err.Error(), 500)
+			return
+		}
+	} else {
+		if err := os.WriteFile(req.Path, data, 0644); err != nil {
+			jsonErr(w, err.Error(), 500)
+			return
+		}
+	}
+
+	s.addLog("POST", "/upload", truncate(req.Path, 80))
+	json.NewEncoder(w).Encode(UploadResp{OK: true, Bytes: len(data)})
+}
+
+func (s *APIServer) handleDownload(w http.ResponseWriter, r *http.Request) {
+	var req DownloadReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid request body", 400)
+		return
+	}
+	if req.Path == "" {
+		jsonErr(w, "path is required", 400)
+		return
+	}
+
+	f, err := os.Open(req.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			jsonErr(w, err.Error(), 200)
+			return
+		}
+		jsonErr(w, err.Error(), 500)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		jsonErr(w, err.Error(), 500)
+		return
+	}
+	total := info.Size()
+
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 1024 * 1024
+	}
+	if limit > 8*1024*1024 {
+		limit = 8 * 1024 * 1024
+	}
+
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		jsonErr(w, err.Error(), 500)
+		return
+	}
+	buf := make([]byte, limit)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		jsonErr(w, err.Error(), 500)
+		return
+	}
+
+	s.addLog("POST", "/download", truncate(req.Path, 80))
+	json.NewEncoder(w).Encode(DownloadResp{
+		Data:      base64.StdEncoding.EncodeToString(buf[:n]),
+		Size:      n,
+		TotalSize: total,
+		Offset:    offset,
+		EOF:       offset+int64(n) >= total,
+	})
 }
 
 func findMatchLines(content, pattern string) []int {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -171,4 +173,124 @@ func TestAPIServerObserve(t *testing.T) {
 	t.Logf("\n[11] APIServer.GetLogs()")
 	t.Logf("count: %d", len(logs))
 	t.Logf("logs:\n%s", string(b))
+}
+
+func TestReadAndLsNotFoundReturn200WithError(t *testing.T) {
+	s := NewAPIServer("127.0.0.1", 19180, nil, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("start api server failed: %v", err)
+	}
+	defer s.Stop()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", s.Port())
+	client := &http.Client{Timeout: 8 * time.Second}
+	missing := filepath.Join(t.TempDir(), "not-exist-path")
+
+	status, out := callRaw(t, client, http.MethodPost, base+"/read", ReadReq{Path: missing})
+	if status != 200 {
+		t.Fatalf("POST /read not-found status=%d body=%s", status, string(out))
+	}
+	var readErr map[string]string
+	if err := json.Unmarshal(out, &readErr); err != nil {
+		t.Fatalf("POST /read unmarshal failed: %v, body=%s", err, string(out))
+	}
+	if strings.TrimSpace(readErr["error"]) == "" {
+		t.Fatalf("POST /read expected error payload, got: %s", string(out))
+	}
+
+	status, out = callRaw(t, client, http.MethodPost, base+"/ls", LsReq{Path: missing})
+	if status != 200 {
+		t.Fatalf("POST /ls not-found status=%d body=%s", status, string(out))
+	}
+	var lsErr map[string]string
+	if err := json.Unmarshal(out, &lsErr); err != nil {
+		t.Fatalf("POST /ls unmarshal failed: %v, body=%s", err, string(out))
+	}
+	if strings.TrimSpace(lsErr["error"]) == "" {
+		t.Fatalf("POST /ls expected error payload, got: %s", string(out))
+	}
+}
+
+func TestExecTimeout(t *testing.T) {
+	s := NewAPIServer("127.0.0.1", 19280, nil, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("start api server failed: %v", err)
+	}
+	defer s.Stop()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", s.Port())
+	client := &http.Client{Timeout: 8 * time.Second}
+
+	cmd := "sleep 2"
+	if runtime.GOOS == "windows" {
+		cmd = "Start-Sleep -Seconds 2"
+	}
+	status, out := callRaw(t, client, http.MethodPost, base+"/exec", ExecReq{
+		Cmd:        cmd,
+		TimeoutSec: 1,
+	})
+	if status != 200 {
+		t.Fatalf("POST /exec timeout status=%d body=%s", status, string(out))
+	}
+	var resp ExecResp
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("unmarshal exec resp failed: %v body=%s", err, string(out))
+	}
+	if resp.Code != 124 {
+		t.Fatalf("expected timeout code=124, got=%d body=%s", resp.Code, string(out))
+	}
+	if !strings.Contains(resp.Stderr, "timed out") {
+		t.Fatalf("expected timeout stderr marker, got=%q", resp.Stderr)
+	}
+}
+
+func TestUploadAndDownload(t *testing.T) {
+	s := NewAPIServer("127.0.0.1", 19680, nil, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("start api server failed: %v", err)
+	}
+	defer s.Stop()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", s.Port())
+	client := &http.Client{Timeout: 8 * time.Second}
+	target := filepath.Join(t.TempDir(), "bin.dat")
+
+	part1 := []byte{0x00, 0x01, 0x02, 0x03}
+	part2 := []byte("hello")
+	status, out := callRaw(t, client, http.MethodPost, base+"/upload", UploadReq{
+		Path: target,
+		Data: base64.StdEncoding.EncodeToString(part1),
+	})
+	if status != 200 {
+		t.Fatalf("upload part1 status=%d body=%s", status, string(out))
+	}
+
+	status, out = callRaw(t, client, http.MethodPost, base+"/upload", UploadReq{
+		Path:   target,
+		Data:   base64.StdEncoding.EncodeToString(part2),
+		Append: true,
+	})
+	if status != 200 {
+		t.Fatalf("upload part2 status=%d body=%s", status, string(out))
+	}
+
+	status, out = callRaw(t, client, http.MethodPost, base+"/download", DownloadReq{Path: target, Offset: 0, Limit: 32})
+	if status != 200 {
+		t.Fatalf("download status=%d body=%s", status, string(out))
+	}
+	var dl DownloadResp
+	if err := json.Unmarshal(out, &dl); err != nil {
+		t.Fatalf("download unmarshal failed: %v body=%s", err, string(out))
+	}
+	raw, err := base64.StdEncoding.DecodeString(dl.Data)
+	if err != nil {
+		t.Fatalf("decode download data failed: %v", err)
+	}
+	want := append(part1, part2...)
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("download bytes mismatch got=%v want=%v", raw, want)
+	}
+	if !dl.EOF {
+		t.Fatalf("expected eof=true got=%v", dl.EOF)
+	}
 }
