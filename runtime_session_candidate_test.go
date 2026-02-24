@@ -122,3 +122,35 @@ func TestEvaluateCandidateConnectivityRetryExhausted(t *testing.T) {
 		t.Fatalf("expected peer_not_ready warning, logs=%v", logs)
 	}
 }
+
+func TestEvaluateCandidateConnectivityNonSelfPeerWithoutVirtualIP(t *testing.T) {
+	var logs []string
+	cfg := candidateCheckConfig{
+		maxChecks:   3,
+		window:      30 * time.Millisecond,
+		step:        5 * time.Millisecond,
+		probeTimout: 5 * time.Millisecond,
+	}
+	deps := sessionDeps{
+		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
+			return PeerReadiness{Ready: false, NonSelfPresent: true}, nil
+		},
+		routeInterfaceForTarget: func(string) (string, error) { return "", nil },
+		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
+		shouldCheckRouteOwner:   func() bool { return true },
+		sleep:                   time.Sleep,
+	}
+
+	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
+		logs = append(logs, result+":"+reason+":"+detail)
+	})
+	if !got.nonSelfPresent {
+		t.Fatalf("expected nonSelfPresent=true, got %+v", got)
+	}
+	if got.peerReady {
+		t.Fatalf("expected peerReady=false when no target virtual ip, got %+v", got)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "warn:peer_waiting_virtual_ip:") {
+		t.Fatalf("expected peer_waiting_virtual_ip warning, logs=%v", logs)
+	}
+}

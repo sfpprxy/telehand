@@ -195,8 +195,9 @@ type PeerInfoSnapshot struct {
 }
 
 type PeerReadiness struct {
-	Ready    bool
-	TargetIP string
+	Ready          bool
+	TargetIP       string
+	NonSelfPresent bool
 }
 
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
@@ -362,18 +363,25 @@ func (et *EasyTier) QueryPeerReadiness() (PeerReadiness, error) {
 	if err != nil {
 		return PeerReadiness{}, err
 	}
+	nonSelfPresent := false
 	for _, p := range raw {
 		peerID := strings.TrimSpace(p.PeerID)
 		ip := stripCIDR(p.IPv4)
 		if peerID != "" && selfID != "" && peerID == selfID {
 			continue
 		}
+		hostname := strings.TrimSpace(p.Hostname)
+		if peerID != "" || hostname != "" {
+			if hostname == "" || !strings.EqualFold(hostname, strings.TrimSpace(node.Hostname)) {
+				nonSelfPresent = true
+			}
+		}
 		if ip == "" || ip == "0.0.0.0" || ip == selfIP {
 			continue
 		}
-		return PeerReadiness{Ready: true, TargetIP: ip}, nil
+		return PeerReadiness{Ready: true, TargetIP: ip, NonSelfPresent: true}, nil
 	}
-	return PeerReadiness{Ready: false}, nil
+	return PeerReadiness{Ready: false, NonSelfPresent: nonSelfPresent}, nil
 }
 
 func valueOrDash(v string) string {

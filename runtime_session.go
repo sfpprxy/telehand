@@ -46,6 +46,7 @@ type runningGuardConfig struct {
 
 type candidateCheckResult struct {
 	peerReady           bool
+	nonSelfPresent      bool
 	probeSuccess        bool
 	peerQueryFailures   int
 	routeMismatchDetail string
@@ -293,6 +294,12 @@ connectLoop:
 			lastCode = ""
 			break connectLoop
 		}
+		if strings.EqualFold(role, "client") && checkResult.nonSelfPresent && checkResult.peerQueryFailures == 0 {
+			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, "pass", "peer_waiting_virtual_ip", "non-self peer present but virtual ip not ready; allow running for first join")
+			lastErr = nil
+			lastCode = ""
+			break connectLoop
+		}
 
 		if checkResult.routeMismatchDetail != "" && checkResult.peerQueryFailures >= checkCfg.maxChecks {
 			lastErr = fmt.Errorf("route conflict evidence: %s, peer_query_failed=%d", checkResult.routeMismatchDetail, checkResult.peerQueryFailures)
@@ -474,8 +481,13 @@ func evaluateCandidateConnectivity(
 		}
 
 		result.peerReady = readiness.Ready
+		result.nonSelfPresent = result.nonSelfPresent || readiness.NonSelfPresent
 		if !result.peerReady {
-			logFn("warn", "peer_not_ready", "peer list empty")
+			if readiness.NonSelfPresent {
+				logFn("warn", "peer_waiting_virtual_ip", "non-self peer present but virtual ip not ready")
+			} else {
+				logFn("warn", "peer_not_ready", "peer list empty")
+			}
 			if cfg.step > 0 {
 				deps.sleep(cfg.step)
 			}
@@ -551,6 +563,11 @@ func runRunningStateGuard(
 			reason = "peer_query_failed"
 			detail = err.Error()
 		} else if !readiness.Ready {
+			if readiness.NonSelfPresent {
+				failures = 0
+				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "peer_waiting_virtual_ip", "non-self peer present but virtual ip not ready")
+				continue
+			}
 			failed = true
 			reason = "peer_query_failed"
 			detail = "peer list empty"
