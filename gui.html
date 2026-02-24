@@ -278,7 +278,10 @@ function clearConfigInputSession() {
 function renderRole(state) {
   const role = state && state.role ? state.role : 'unknown';
   document.getElementById('role-subtitle').textContent = '角色: ' + role;
-  updatePeerTitle(state && state.network_hash ? String(state.network_hash) : '');
+  updatePeerTitle(
+    state && state.network_owner ? String(state.network_owner) : '',
+    state && state.network_hash ? String(state.network_hash) : ''
+  );
   const hint = document.getElementById('running-hint');
   if (role === 'client') {
     hint.textContent = '控制端已连接，请把下方命令发给被控端执行。';
@@ -287,14 +290,19 @@ function renderRole(state) {
   }
 }
 
-function updatePeerTitle(networkHash) {
+function updatePeerTitle(networkOwner, networkHash) {
   const title = document.getElementById('peer-title');
+  const owner = networkOwner ? String(networkOwner).trim() : '';
   const hash = networkHash ? String(networkHash).trim() : '';
-  if (!hash) {
+  if (!owner && !hash) {
     title.textContent = 'Peer Info';
     return;
   }
-  title.textContent = 'Peer Info (网络名称:' + hash + ')';
+  if (owner && hash) {
+    title.textContent = 'Peer Info (' + owner + ':' + hash + ')';
+    return;
+  }
+  title.textContent = 'Peer Info (' + (owner || hash) + ')';
 }
 
 function renderRunning(state) {
@@ -439,9 +447,11 @@ function applyServerState(state) {
 }
 
 function renderPeerInfo(snapshot) {
+  const ownerFromSnapshot = snapshot && snapshot.network_owner ? String(snapshot.network_owner) : '';
+  const ownerFromState = currentState && currentState.network_owner ? String(currentState.network_owner) : '';
   const hashFromSnapshot = snapshot && snapshot.network_hash ? String(snapshot.network_hash) : '';
   const hashFromState = currentState && currentState.network_hash ? String(currentState.network_hash) : '';
-  updatePeerTitle(hashFromSnapshot || hashFromState);
+  updatePeerTitle(ownerFromSnapshot || ownerFromState, hashFromSnapshot || hashFromState);
   const body = document.getElementById('peer-table-body');
   if (!snapshot || !Array.isArray(snapshot.peers) || snapshot.peers.length === 0) {
     body.innerHTML = '<tr><td colspan="11" class="peer-hint">等待网络数据...</td></tr>';

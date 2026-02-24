@@ -188,9 +188,10 @@ type PeerInfo struct {
 }
 
 type PeerInfoSnapshot struct {
-	UpdatedAt   string     `json:"updated_at"`
-	NetworkHash string     `json:"network_hash,omitempty"`
-	Peers       []PeerInfo `json:"peers"`
+	UpdatedAt    string     `json:"updated_at"`
+	NetworkOwner string     `json:"network_owner,omitempty"`
+	NetworkHash  string     `json:"network_hash,omitempty"`
+	Peers        []PeerInfo `json:"peers"`
 }
 
 type PeerReadiness struct {

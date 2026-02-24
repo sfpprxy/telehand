@@ -30,6 +30,7 @@ type GUIServer struct {
 type GUIState struct {
 	Phase            string           `json:"phase"` // "config" | "connecting" | "running" | "error"
 	Role             string           `json:"role,omitempty"`
+	NetworkOwner     string           `json:"network_owner,omitempty"`
 	NetworkHash      string           `json:"network_hash,omitempty"`
 	TUNDevice        string           `json:"tun_device,omitempty"`
 	VirtualSubnet    string           `json:"virtual_subnet,omitempty"`

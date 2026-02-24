@@ -89,26 +89,30 @@ func runSession(opts sessionOptions) int {
 	})
 
 	var (
-		runtimeMu      sync.RWMutex
-		runtimeET      *EasyTier
-		runtimeNetHash string
+		runtimeMu       sync.RWMutex
+		runtimeET       *EasyTier
+		runtimeNetOwner string
+		runtimeNetHash  string
 	)
 	gui.SetPeerInfoProvider(func() (PeerInfoSnapshot, error) {
 		runtimeMu.RLock()
 		et := runtimeET
+		networkOwner := runtimeNetOwner
 		networkHash := runtimeNetHash
 		runtimeMu.RUnlock()
 		if et == nil {
 			return PeerInfoSnapshot{
-				UpdatedAt:   time.Now().Format(time.RFC3339),
-				NetworkHash: networkHash,
-				Peers:       []PeerInfo{},
+				UpdatedAt:    time.Now().Format(time.RFC3339),
+				NetworkOwner: networkOwner,
+				NetworkHash:  networkHash,
+				Peers:        []PeerInfo{},
 			}, nil
 		}
 		snapshot, err := et.QueryPeerInfo(role)
 		if err != nil {
 			return snapshot, err
 		}
+		snapshot.NetworkOwner = networkOwner
 		snapshot.NetworkHash = networkHash
 		return snapshot, nil
 	})
@@ -185,11 +189,14 @@ func runSession(opts sessionOptions) int {
 	fmt.Printf("Network ready: name=%s secret=%s peers=%s\n", cfg.NetworkName, maskSecret(cfg.NetworkSecret), strings.Join(cfg.Peers, ","))
 	fmt.Printf("State: initializing -> connecting (%s)\n", role)
 
+	networkOwner := networkOwnerFromNetworkName(cfg.NetworkName)
 	networkHash := computeNetworkHash(cfg.NetworkName, cfg.NetworkSecret)
 	state = gui.GetState()
+	state.NetworkOwner = networkOwner
 	state.NetworkHash = networkHash
 	gui.SetState(state)
 	runtimeMu.Lock()
+	runtimeNetOwner = networkOwner
 	runtimeNetHash = networkHash
 	runtimeMu.Unlock()
 
@@ -353,6 +360,7 @@ connectLoop:
 		if err != nil {
 			return snapshot, err
 		}
+		snapshot.NetworkOwner = networkOwner
 		snapshot.NetworkHash = networkHash
 		return snapshot, nil
 	})
@@ -637,8 +645,12 @@ func printPeerInfoLoop(stop <-chan struct{}, fetch func() (PeerInfoSnapshot, err
 
 func printPeerSnapshot(snapshot PeerInfoSnapshot) {
 	title := "Peer Info"
-	if strings.TrimSpace(snapshot.NetworkHash) != "" {
-		title += fmt.Sprintf(" (网络名称:%s)", snapshot.NetworkHash)
+	owner := strings.TrimSpace(snapshot.NetworkOwner)
+	hash := strings.TrimSpace(snapshot.NetworkHash)
+	if owner != "" && hash != "" {
+		title += fmt.Sprintf(" (%s:%s)", owner, hash)
+	} else if hash != "" {
+		title += fmt.Sprintf(" (%s)", hash)
 	}
 	fmt.Printf("\n%s (%s)\n", title, snapshot.UpdatedAt)
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -663,4 +675,20 @@ func printPeerSnapshot(snapshot PeerInfoSnapshot) {
 		)
 	}
 	w.Flush()
+}
+
+func networkOwnerFromNetworkName(networkName string) string {
+	name := strings.TrimSpace(networkName)
+	if name == "" {
+		return ""
+	}
+	parts := strings.Split(name, ":")
+	if len(parts) < 2 {
+		return name
+	}
+	owner := strings.TrimSpace(parts[len(parts)-1])
+	if owner == "" {
+		return name
+	}
+	return owner
 }
