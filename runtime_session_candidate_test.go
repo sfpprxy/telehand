@@ -1,0 +1,124 @@
+package main
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestEvaluateCandidateConnectivityRouteMismatchButReachable(t *testing.T) {
+	var logs []string
+	cfg := candidateCheckConfig{
+		maxChecks:   3,
+		window:      50 * time.Millisecond,
+		step:        time.Millisecond,
+		probeTimout: 5 * time.Millisecond,
+	}
+	deps := sessionDeps{
+		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
+			return PeerReadiness{Ready: true, TargetIP: "10.77.0.2"}, nil
+		},
+		routeInterfaceForTarget: func(string) (string, error) { return "en0", nil },
+		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
+		shouldCheckRouteOwner:   func() bool { return true },
+		sleep:                   func(time.Duration) {},
+	}
+
+	got := evaluateCandidateConnectivity(nil, "utun9", 8080, cfg, deps, func(result, reason, detail string) {
+		logs = append(logs, result+":"+reason+":"+detail)
+	})
+
+	if !got.peerReady || !got.probeSuccess {
+		t.Fatalf("expected peer ready and probe success, got %+v", got)
+	}
+	if got.routeMismatchDetail == "" {
+		t.Fatalf("expected route mismatch detail to be recorded")
+	}
+	if got.peerQueryFailures != 0 {
+		t.Fatalf("expected no peer query failures, got %d", got.peerQueryFailures)
+	}
+
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "warn:route_mismatch:") {
+		t.Fatalf("expected route_mismatch warning in logs, got %q", joined)
+	}
+	if !strings.Contains(joined, "pass:peer_ready:") {
+		t.Fatalf("expected peer_ready pass in logs, got %q", joined)
+	}
+}
+
+func TestEvaluateCandidateConnectivityExplicitConflictEvidence(t *testing.T) {
+	var calls int
+	cfg := candidateCheckConfig{
+		maxChecks:   3,
+		window:      60 * time.Millisecond,
+		step:        5 * time.Millisecond,
+		probeTimout: 5 * time.Millisecond,
+	}
+	deps := sessionDeps{
+		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
+			calls++
+			if calls == 1 {
+				return PeerReadiness{Ready: true, TargetIP: "10.88.0.2"}, nil
+			}
+			return PeerReadiness{}, errors.New("peer list query failed")
+		},
+		routeInterfaceForTarget: func(string) (string, error) { return "en0", nil },
+		probePeerVirtualIP:      func(string, int, time.Duration) error { return errors.New("dial timeout") },
+		shouldCheckRouteOwner:   func() bool { return true },
+		sleep:                   time.Sleep,
+	}
+
+	got := evaluateCandidateConnectivity(nil, "utun8", 8080, cfg, deps, func(string, string, string) {})
+
+	if got.routeMismatchDetail == "" {
+		t.Fatalf("expected route mismatch detail, got %+v", got)
+	}
+	if got.peerQueryFailures < cfg.maxChecks {
+		t.Fatalf("expected peer query failures >= %d, got %d", cfg.maxChecks, got.peerQueryFailures)
+	}
+	if got.probeSuccess {
+		t.Fatalf("expected no probe success, got %+v", got)
+	}
+}
+
+func TestEvaluateCandidateConnectivityRetryExhausted(t *testing.T) {
+	var logs []string
+	cfg := candidateCheckConfig{
+		maxChecks:   3,
+		window:      40 * time.Millisecond,
+		step:        5 * time.Millisecond,
+		probeTimout: 5 * time.Millisecond,
+	}
+	deps := sessionDeps{
+		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
+			return PeerReadiness{Ready: false}, nil
+		},
+		routeInterfaceForTarget: func(string) (string, error) { return "", nil },
+		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
+		shouldCheckRouteOwner:   func() bool { return true },
+		sleep:                   time.Sleep,
+	}
+
+	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
+		logs = append(logs, result+":"+reason+":"+detail)
+	})
+
+	if got.peerReady {
+		t.Fatalf("expected peer not ready, got %+v", got)
+	}
+	if got.probeSuccess {
+		t.Fatalf("expected probe not successful, got %+v", got)
+	}
+	if got.routeMismatchDetail != "" {
+		t.Fatalf("unexpected route mismatch detail: %+v", got)
+	}
+	if got.peerQueryFailures != 0 {
+		t.Fatalf("unexpected peer query failures: %+v", got)
+	}
+
+	if !strings.Contains(strings.Join(logs, "\n"), "warn:peer_not_ready:") {
+		t.Fatalf("expected peer_not_ready warning, logs=%v", logs)
+	}
+}

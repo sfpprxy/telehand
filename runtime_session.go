@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"runtime"
@@ -20,6 +21,58 @@ type sessionOptions struct {
 	Commands         []InstallCommand
 	ClipboardCommand string
 }
+
+type sessionDeps struct {
+	queryPeerReadiness      func(*EasyTier) (PeerReadiness, error)
+	routeInterfaceForTarget func(string) (string, error)
+	probePeerVirtualIP      func(string, int, time.Duration) error
+	shouldCheckRouteOwner   func() bool
+	sleep                   func(time.Duration)
+}
+
+type candidateCheckConfig struct {
+	maxChecks   int
+	window      time.Duration
+	step        time.Duration
+	probeTimout time.Duration
+}
+
+type runningGuardConfig struct {
+	protectionWindow  time.Duration
+	checkInterval     time.Duration
+	consecutiveFailed int
+	probeTimeout      time.Duration
+}
+
+type candidateCheckResult struct {
+	peerReady           bool
+	probeSuccess        bool
+	peerQueryFailures   int
+	routeMismatchDetail string
+	lastProbeErr        error
+}
+
+var (
+	defaultSessionDeps = sessionDeps{
+		queryPeerReadiness:      func(et *EasyTier) (PeerReadiness, error) { return et.QueryPeerReadiness() },
+		routeInterfaceForTarget: routeInterfaceForTarget,
+		probePeerVirtualIP:      probePeerVirtualIP,
+		shouldCheckRouteOwner:   shouldCheckRouteOwnership,
+		sleep:                   time.Sleep,
+	}
+	defaultCandidateCheckConfig = candidateCheckConfig{
+		maxChecks:   3,
+		window:      5 * time.Second,
+		step:        1500 * time.Millisecond,
+		probeTimout: 800 * time.Millisecond,
+	}
+	defaultRunningGuardConfig = runningGuardConfig{
+		protectionWindow:  5 * time.Second,
+		checkInterval:     2 * time.Second,
+		consecutiveFailed: 3,
+		probeTimeout:      800 * time.Millisecond,
+	}
+)
 
 func runSession(opts sessionOptions) int {
 	role := strings.ToLower(strings.TrimSpace(opts.Role))
@@ -166,7 +219,10 @@ func runSession(opts sessionOptions) int {
 		lastErr  error
 		lastCode string
 	)
+	deps := defaultSessionDeps
+	checkCfg := defaultCandidateCheckConfig
 
+connectLoop:
 	for attempt, candidate := range candidates {
 		msg := fmt.Sprintf("[telehand] startup candidate %d/%d subnet=%s local=%s", attempt+1, len(candidates), candidate.SubnetCIDR, candidate.LocalCIDR)
 		gui.AddDebugLog(msg)
@@ -221,25 +277,34 @@ func runSession(opts sessionOptions) int {
 			NetworkHash: networkHash,
 		}
 
-		if shouldCheckRouteOwnership() {
-			routeIface, routeErr := routeInterfaceForTarget(candidate.ExpectedPeerIP)
-			if routeErr != nil {
-				lastErr = routeErr
-				lastCode = ErrorCodeRouteConflictDetected
-				activeET.Stop()
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(routeIface), strings.TrimSpace(tunDevice)) {
-				lastErr = fmt.Errorf("route mismatch: target=%s route_if=%s tun_if=%s", candidate.ExpectedPeerIP, routeIface, tunDevice)
-				lastCode = ErrorCodeRouteConflictDetected
-				activeET.Stop()
-				continue
-			}
+		checkResult := evaluateCandidateConnectivity(activeET, tunDevice, apiPort, checkCfg, deps, func(result, reason, detail string) {
+			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, result, reason, detail)
+		})
+
+		if checkResult.peerReady && checkResult.probeSuccess {
+			lastErr = nil
+			lastCode = ""
+			break connectLoop
 		}
 
-		lastErr = nil
-		lastCode = ""
-		break
+		if checkResult.routeMismatchDetail != "" && checkResult.peerQueryFailures >= checkCfg.maxChecks {
+			lastErr = fmt.Errorf("route conflict evidence: %s, peer_query_failed=%d", checkResult.routeMismatchDetail, checkResult.peerQueryFailures)
+			lastCode = ErrorCodeRouteConflictDetected
+			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, "conflict", "route_conflict_detected", lastErr.Error())
+			activeET.Stop()
+			continue
+		}
+
+		lastCode = ErrorCodePeerUnreachable
+		if checkResult.peerReady && checkResult.lastProbeErr != nil {
+			lastErr = fmt.Errorf("peer ready but connectivity probe failed: %v", checkResult.lastProbeErr)
+		} else if !checkResult.peerReady {
+			lastErr = fmt.Errorf("peer not ready within %s", checkCfg.window)
+		} else {
+			lastErr = fmt.Errorf("peer probe failed without explicit conflict")
+		}
+		activeET.Stop()
+		continue
 	}
 
 	if virtIP == "" {
@@ -262,15 +327,18 @@ func runSession(opts sessionOptions) int {
 	}
 
 	fmt.Printf("EasyTier virtual IP: %s\n", virtIP)
-	fmt.Printf("Session baseline: tun=%s subnet=%s network_hash=%s\n", baseline.TunDevice, baseline.VirtualCIDR, baseline.NetworkHash)
+	fmt.Printf("Session baseline: tun_device=%s virtual_subnet=%s network_hash=%s\n", baseline.TunDevice, baseline.VirtualCIDR, baseline.NetworkHash)
 	state = gui.GetState()
 	state.Phase = "running"
 	state.VirtIP = virtIP
+	state.TUNDevice = baseline.TunDevice
+	state.VirtualSubnet = baseline.VirtualCIDR
 	state.Error = ""
 	state.ErrorCode = ""
 	gui.SetState(state)
 	fmt.Printf("State: connecting -> running\n")
 	fmt.Printf("API server reachable at http://%s:%d\n", virtIP, apiPort)
+	fmt.Printf("State guard: protection_window=%s, threshold=%d consecutive failures\n", defaultRunningGuardConfig.protectionWindow, defaultRunningGuardConfig.consecutiveFailed)
 
 	stopPeerPrint := make(chan struct{}, 1)
 	go printPeerInfoLoop(stopPeerPrint, func() (PeerInfoSnapshot, error) {
@@ -292,17 +360,24 @@ func runSession(opts sessionOptions) int {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	stopCh := make(chan struct{}, 1)
+	guardStop := make(chan struct{}, 1)
 	go func() { <-sig; stopCh <- struct{}{} }()
 	go func() { gui.WaitForConfig(); stopCh <- struct{}{} }()
+	go runRunningStateGuard(gui, cliOnly, activeET, baseline.TunDevice, apiPort, defaultRunningGuardConfig, deps, guardStop, stopCh)
 
 	<-stopCh
 	fmt.Println("State: stopping")
+	guardStop <- struct{}{}
 	stopPeerPrint <- struct{}{}
 	api.Stop()
 	if activeET != nil {
 		activeET.Stop()
 	}
 	gui.Stop()
+	final := gui.GetState()
+	if final.Phase == "error" && final.ErrorCode != "" {
+		return exitCodeFromErrorCode(final.ErrorCode, ExitCodeNetwork)
+	}
 	return ExitCodeOK
 }
 
@@ -355,6 +430,183 @@ func exitCodeFromErrorCode(code string, fallback int) int {
 
 func shouldCheckRouteOwnership() bool {
 	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+}
+
+func logCandidateDecision(gui *GUIServer, cliOnly bool, attempt, total int, subnet, result, reason, detail string) {
+	line := fmt.Sprintf("[telehand] candidate=%d/%d subnet=%s result=%s reason=%s detail=%s", attempt, total, subnet, result, reason, detail)
+	gui.AddDebugLog(line)
+	if cliOnly {
+		fmt.Println(line)
+	}
+}
+
+func evaluateCandidateConnectivity(
+	et *EasyTier,
+	tunDevice string,
+	apiPort int,
+	cfg candidateCheckConfig,
+	deps sessionDeps,
+	logFn func(result, reason, detail string),
+) candidateCheckResult {
+	result := candidateCheckResult{}
+	deadline := time.Now().Add(cfg.window)
+
+	for check := 1; time.Now().Before(deadline); check++ {
+		if check > 64 {
+			break
+		}
+		readiness, readyErr := deps.queryPeerReadiness(et)
+		if readyErr != nil {
+			result.peerQueryFailures++
+			logFn("warn", "peer_query_failed", readyErr.Error())
+			if cfg.step > 0 {
+				deps.sleep(cfg.step)
+			}
+			continue
+		}
+
+		result.peerReady = readiness.Ready
+		if !result.peerReady {
+			logFn("warn", "peer_not_ready", "peer list empty")
+			if cfg.step > 0 {
+				deps.sleep(cfg.step)
+			}
+			continue
+		}
+
+		targetIP := strings.TrimSpace(readiness.TargetIP)
+		if deps.shouldCheckRouteOwner() && targetIP != "" {
+			routeIface, routeErr := deps.routeInterfaceForTarget(targetIP)
+			if routeErr != nil {
+				logFn("warn", "route_check_failed", routeErr.Error())
+			} else if !strings.EqualFold(strings.TrimSpace(routeIface), strings.TrimSpace(tunDevice)) {
+				result.routeMismatchDetail = fmt.Sprintf("target=%s route_if=%s tun_if=%s", targetIP, routeIface, tunDevice)
+				logFn("warn", "route_mismatch", result.routeMismatchDetail)
+			}
+		}
+
+		if targetIP == "" {
+			result.lastProbeErr = fmt.Errorf("target peer virtual ip is empty")
+			logFn("warn", "probe_timeout", result.lastProbeErr.Error())
+			if cfg.step > 0 {
+				deps.sleep(cfg.step)
+			}
+			continue
+		}
+
+		if probeErr := deps.probePeerVirtualIP(targetIP, apiPort, cfg.probeTimout); probeErr == nil {
+			result.probeSuccess = true
+			logFn("pass", "peer_ready", fmt.Sprintf("target=%s", targetIP))
+			break
+		} else {
+			result.lastProbeErr = probeErr
+			logFn("warn", "probe_timeout", probeErr.Error())
+		}
+		if cfg.step > 0 {
+			deps.sleep(cfg.step)
+		}
+	}
+	return result
+}
+
+func runRunningStateGuard(
+	gui *GUIServer,
+	cliOnly bool,
+	et *EasyTier,
+	tunDevice string,
+	apiPort int,
+	cfg runningGuardConfig,
+	deps sessionDeps,
+	stop <-chan struct{},
+	sessionStop chan<- struct{},
+) {
+	startedAt := time.Now()
+	failures := 0
+	ticker := time.NewTicker(cfg.checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+
+		readiness, err := deps.queryPeerReadiness(et)
+		failed := false
+		reason := ""
+		detail := ""
+		targetIP := ""
+
+		if err != nil {
+			failed = true
+			reason = "peer_query_failed"
+			detail = err.Error()
+		} else if !readiness.Ready {
+			failed = true
+			reason = "peer_query_failed"
+			detail = "peer list empty"
+		} else {
+			targetIP = strings.TrimSpace(readiness.TargetIP)
+			if deps.shouldCheckRouteOwner() && targetIP != "" {
+				iface, routeErr := deps.routeInterfaceForTarget(targetIP)
+				if routeErr != nil {
+					logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "route_check_failed", routeErr.Error())
+				} else if !strings.EqualFold(strings.TrimSpace(iface), strings.TrimSpace(tunDevice)) {
+					logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "route_mismatch", fmt.Sprintf("target=%s route_if=%s tun_if=%s", targetIP, iface, tunDevice))
+				}
+			}
+			if targetIP == "" {
+				failed = true
+				reason = "probe_timeout"
+				detail = "target peer virtual ip is empty"
+			} else if probeErr := deps.probePeerVirtualIP(targetIP, apiPort, cfg.probeTimeout); probeErr != nil {
+				failed = true
+				reason = "probe_timeout"
+				detail = probeErr.Error()
+			}
+		}
+
+		if !failed {
+			failures = 0
+			logCandidateDecision(gui, cliOnly, 1, 1, "running", "pass", "peer_ready", fmt.Sprintf("target=%s", targetIP))
+			continue
+		}
+
+		if time.Since(startedAt) < cfg.protectionWindow {
+			failures = 0
+			logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", reason, fmt.Sprintf("within_protection_window: %s", detail))
+			continue
+		}
+
+		failures++
+		logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", reason, fmt.Sprintf("consecutive_failures=%d/%d %s", failures, cfg.consecutiveFailed, detail))
+		if failures < cfg.consecutiveFailed {
+			continue
+		}
+
+		errMsg := formatConnectError(ErrorCodePeerUnreachable, fmt.Errorf("running health degraded: %s", detail))
+		setSessionError(gui, apiPort, ErrorCodePeerUnreachable, errMsg)
+		select {
+		case sessionStop <- struct{}{}:
+		default:
+		}
+		return
+	}
+}
+
+func probePeerVirtualIP(ip string, port int, timeout time.Duration) error {
+	target := strings.TrimSpace(ip)
+	if net.ParseIP(target) == nil {
+		return fmt.Errorf("invalid peer ip: %q", ip)
+	}
+	addr := fmt.Sprintf("%s:%d", target, port)
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return err
+	}
+	conn.Close()
+	return nil
 }
 
 func printPeerInfoLoop(stop <-chan struct{}, fetch func() (PeerInfoSnapshot, error)) {

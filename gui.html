@@ -53,6 +53,8 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .peer-table th { background: #f7f8fb; color: #4a4a4a; }
 .peer-self { background: #f0f9ff; }
 .peer-hint { font-size: 12px; color: #888; margin-top: 8px; }
+.baseline-box { margin-top: 12px; text-align: left; background: #f7f8fb; border: 1px solid #dfe3ee; border-radius: 8px; padding: 10px; font-size: 12px; color: #445; }
+.baseline-row { margin: 2px 0; font-family: monospace; word-break: break-all; }
 @media (max-width: 640px) {
   .container { padding: 16px; }
   .ip-box { flex-direction: column; }
@@ -128,6 +130,13 @@ textarea:focus { outline: none; border-color: #4a90d9; }
           </tbody>
         </table>
       </div>
+    </div>
+
+    <div class="baseline-box">
+      <div><strong>Session Baseline</strong></div>
+      <div class="baseline-row" id="baseline-tun">tun_device: -</div>
+      <div class="baseline-row" id="baseline-subnet">virtual_subnet: -</div>
+      <div class="baseline-row" id="baseline-hash">network_hash: -</div>
     </div>
 
     <div class="log-area" id="log-area"></div>
@@ -295,6 +304,9 @@ function renderRunning(state) {
   const endpoint = virtIP && apiPort ? virtIP + ':' + apiPort : '';
   document.getElementById('virt-ip').textContent = endpoint;
   document.getElementById('port-info').textContent = endpoint ? ('API 地址: http://' + endpoint) : '';
+  document.getElementById('baseline-tun').textContent = 'tun_device: ' + ((state && state.tun_device) ? state.tun_device : '-');
+  document.getElementById('baseline-subnet').textContent = 'virtual_subnet: ' + ((state && state.virtual_subnet) ? state.virtual_subnet : '-');
+  document.getElementById('baseline-hash').textContent = 'network_hash: ' + ((state && state.network_hash) ? state.network_hash : '-');
   renderCommands(state);
 }
 

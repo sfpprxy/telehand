@@ -193,6 +193,11 @@ type PeerInfoSnapshot struct {
 	Peers       []PeerInfo `json:"peers"`
 }
 
+type PeerReadiness struct {
+	Ready    bool
+	TargetIP string
+}
+
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -268,20 +273,9 @@ func (et *EasyTier) QueryPeerInfo(role string) (PeerInfoSnapshot, error) {
 		return PeerInfoSnapshot{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "peer", "list")
-	out, err := cmd.CombinedOutput()
+	raw, err := et.queryRawPeerList()
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return PeerInfoSnapshot{}, fmt.Errorf("easytier-cli peer list timed out")
-		}
-		return PeerInfoSnapshot{}, fmt.Errorf("easytier-cli peer list error: %v, output=%s", err, strings.TrimSpace(string(out)))
-	}
-
-	var raw []rawPeerInfo
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return PeerInfoSnapshot{}, fmt.Errorf("invalid peer list json: %v", err)
+		return PeerInfoSnapshot{}, err
 	}
 
 	peerRole := normalizeRoleLabel(role)
@@ -335,6 +329,50 @@ func (et *EasyTier) QueryPeerInfo(role string) (PeerInfoSnapshot, error) {
 		UpdatedAt: time.Now().Format(time.RFC3339),
 		Peers:     peers,
 	}, nil
+}
+
+func (et *EasyTier) queryRawPeerList() ([]rawPeerInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "peer", "list")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("easytier-cli peer list timed out")
+		}
+		return nil, fmt.Errorf("easytier-cli peer list error: %v, output=%s", err, strings.TrimSpace(string(out)))
+	}
+	var raw []rawPeerInfo
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("invalid peer list json: %v", err)
+	}
+	return raw, nil
+}
+
+func (et *EasyTier) QueryPeerReadiness() (PeerReadiness, error) {
+	node, err := et.queryNodeInfo()
+	if err != nil {
+		return PeerReadiness{}, err
+	}
+	selfID := peerIDToString(node.PeerID)
+	selfIP := stripCIDR(node.IPv4Addr)
+
+	raw, err := et.queryRawPeerList()
+	if err != nil {
+		return PeerReadiness{}, err
+	}
+	for _, p := range raw {
+		peerID := strings.TrimSpace(p.PeerID)
+		ip := stripCIDR(p.IPv4)
+		if peerID != "" && selfID != "" && peerID == selfID {
+			continue
+		}
+		if ip == "" || ip == "0.0.0.0" || ip == selfIP {
+			continue
+		}
+		return PeerReadiness{Ready: true, TargetIP: ip}, nil
+	}
+	return PeerReadiness{Ready: false}, nil
 }
 
 func valueOrDash(v string) string {
