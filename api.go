@@ -41,6 +41,7 @@ type CmdLog struct {
 type HealthResp struct {
 	Status    string `json:"status"`
 	Phase     string `json:"phase"`
+	Role      string `json:"role,omitempty"`
 	VirtIP    string `json:"virt_ip,omitempty"`
 	APIPort   int    `json:"api_port,omitempty"`
 	GUIPort   int    `json:"gui_port,omitempty"`

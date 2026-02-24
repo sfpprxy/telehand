@@ -16,22 +16,31 @@ import (
 var guiFS embed.FS
 
 type GUIServer struct {
-	port      int
-	listener  net.Listener
-	mux       *http.ServeMux
-	mu        sync.Mutex
-	state     GUIState
-	configCh  chan *Config
-	logs      []CmdLog
-	debugLogs []string
+	port       int
+	listener   net.Listener
+	mux        *http.ServeMux
+	mu         sync.Mutex
+	state      GUIState
+	configCh   chan *Config
+	logs       []CmdLog
+	debugLogs  []string
+	peerInfoFn func() (PeerInfoSnapshot, error)
 }
 
 type GUIState struct {
-	Phase     string `json:"phase"` // "config" | "connecting" | "running"
-	VirtIP    string `json:"virt_ip,omitempty"`
-	APIPort   int    `json:"api_port,omitempty"`
-	Error     string `json:"error,omitempty"`
-	ErrorCode string `json:"error_code,omitempty"`
+	Phase            string           `json:"phase"` // "config" | "connecting" | "running" | "error"
+	Role             string           `json:"role,omitempty"`
+	VirtIP           string           `json:"virt_ip,omitempty"`
+	APIPort          int              `json:"api_port,omitempty"`
+	Error            string           `json:"error,omitempty"`
+	ErrorCode        string           `json:"error_code,omitempty"`
+	ClipboardCommand string           `json:"clipboard_command,omitempty"`
+	Commands         []InstallCommand `json:"commands,omitempty"`
+}
+
+type InstallCommand struct {
+	Platform string `json:"platform"`
+	Command  string `json:"command"`
 }
 
 var (
@@ -52,6 +61,7 @@ func NewGUIServer(startPort int) *GUIServer {
 	g.mux.HandleFunc("/api/state", g.handleState)
 	g.mux.HandleFunc("/api/logs", g.handleLogs)
 	g.mux.HandleFunc("/api/debug-logs", g.handleDebugLogs)
+	g.mux.HandleFunc("/api/peer-info", g.handlePeerInfo)
 	g.mux.HandleFunc("/api/stop", g.handleStop)
 	return g
 }
@@ -80,6 +90,12 @@ func (g *GUIServer) WaitForConfig() *Config {
 func (g *GUIServer) SetState(s GUIState) {
 	g.mu.Lock()
 	g.state = s
+	g.mu.Unlock()
+}
+
+func (g *GUIServer) SetPeerInfoProvider(fn func() (PeerInfoSnapshot, error)) {
+	g.mu.Lock()
+	g.peerInfoFn = fn
 	g.mu.Unlock()
 }
 
@@ -226,6 +242,25 @@ func (g *GUIServer) handleDebugLogs(w http.ResponseWriter, r *http.Request) {
 	copy(logs, g.debugLogs)
 	g.mu.Unlock()
 	jsonResp(w, 200, logs)
+}
+
+func (g *GUIServer) handlePeerInfo(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	fn := g.peerInfoFn
+	g.mu.Unlock()
+	if fn == nil {
+		jsonResp(w, 200, PeerInfoSnapshot{
+			UpdatedAt: "",
+			Peers:     []PeerInfo{},
+		})
+		return
+	}
+	snapshot, err := fn()
+	if err != nil {
+		jsonResp(w, 200, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonResp(w, 200, snapshot)
 }
 
 func (g *GUIServer) handleStop(w http.ResponseWriter, r *http.Request) {

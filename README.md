@@ -24,6 +24,22 @@ macOS：
 curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && ./telehand
 ```
 
+### 安装指定版本（例如 alpha）
+
+版本参数必须带 `v` 前缀（例如 `v0.2.0-alpha.1`）。
+
+Windows（PowerShell，脚本文件方式）：
+
+```powershell
+iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Version v0.2.0-alpha.1; .\telehand.exe
+```
+
+macOS / Linux：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash -s -- --version v0.2.0-alpha.1 && ./telehand
+```
+
 ### Windows 手动下载详细步骤（GUI）
 
 1. 打开发布页：`https://github.com/sfpprxy/telehand/releases`

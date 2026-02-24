@@ -6,19 +6,24 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "gen-config" {
-		runGenConfig(os.Args[2:])
-		return
+	os.Exit(runMain(os.Args[1:]))
+}
+
+func runMain(args []string) int {
+	if len(args) == 0 {
+		// default: serve mode (for double-click)
+		return runServe(nil)
 	}
-	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		runServe(os.Args[2:])
-		return
+
+	switch args[0] {
+	case "serve":
+		return runServe(args[1:])
+	case "connect":
+		return runConnect(args[1:])
+	case "gen-config":
+		return runGenConfig(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Usage:\n  telehand serve [pairing-code]\n  telehand connect [pairing-code]\n  telehand gen-config --network-name NAME --network-secret SECRET --peers PEERS\n")
+		return ExitCodeParam
 	}
-	// default: serve mode (for double-click)
-	if len(os.Args) == 1 {
-		runServe(nil)
-		return
-	}
-	fmt.Fprintf(os.Stderr, "Usage:\n  agent serve          Start remote assist agent (default)\n  agent gen-config     Generate config string\n")
-	os.Exit(1)
 }

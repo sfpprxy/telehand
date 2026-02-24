@@ -4,159 +4,67 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
-	"os/signal"
-	"runtime"
-	"syscall"
-	"time"
+	"strings"
 )
 
-func runServe(args []string) {
+func runServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	configStr := fs.String("config", "", "base64 config string to auto-connect")
 	noBrowser := fs.Bool("no-browser", false, "do not auto-open browser")
+	networkName := fs.String("network-name", "", "network name (used when no pairing code provided)")
+	networkSecret := fs.String("network-secret", "", "network secret (used when no pairing code provided)")
+	peers := fs.String("peers", "", "comma-separated peers (used when no pairing code provided)")
 	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
+		return ExitCodeParam
 	}
 
-	gui := NewGUIServer(18080)
-	apiPort := 0
-	api := NewAPIServer("0.0.0.0", 8080, func(log CmdLog) {
-		gui.AddLog(log)
-	}, func() HealthResp {
-		s := gui.GetState()
-		return HealthResp{
-			Status:    "ok",
-			Phase:     s.Phase,
-			VirtIP:    s.VirtIP,
-			APIPort:   apiPort,
-			GUIPort:   gui.Port(),
-			Error:     s.Error,
-			ErrorCode: s.ErrorCode,
+	if len(fs.Args()) > 1 {
+		fmt.Fprintln(os.Stderr, "Usage: telehand serve [pairing-code] [--config <code>] [--network-name ... --network-secret ... --peers ...]")
+		return ExitCodeParam
+	}
+
+	positionalCode := ""
+	if len(fs.Args()) == 1 {
+		positionalCode = strings.TrimSpace(fs.Args()[0])
+	}
+
+	flagCode := strings.TrimSpace(*configStr)
+	if positionalCode != "" && flagCode != "" && positionalCode != flagCode {
+		fmt.Fprintln(os.Stderr, "Both positional pairing code and --config are provided but not equal")
+		return ExitCodeParam
+	}
+
+	encoded := flagCode
+	if encoded == "" {
+		encoded = positionalCode
+	}
+
+	var (
+		cfg *Config
+		err error
+	)
+
+	if encoded == "" {
+		encoded, cfg, err = buildEncodedConfigWithDefaults(*networkName, *networkSecret, *peers)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid defaults: %v\n", err)
+			return ExitCodeParam
 		}
-	}, func(cfg string) error {
-		return gui.SubmitConfigEncoded(cfg)
-	})
-	if err := api.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start API server: %v\n", err)
-		os.Exit(1)
-	}
-	apiPort = api.Port()
-	fmt.Printf("API server started at http://0.0.0.0:%d\n", apiPort)
-
-	if err := gui.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start GUI: %v\n", err)
-		api.Stop()
-		os.Exit(1)
-	}
-	gui.SetState(GUIState{Phase: "config", APIPort: apiPort})
-	guiURL := fmt.Sprintf("http://127.0.0.1:%d", gui.Port())
-	fmt.Printf("GUI started at %s\n", guiURL)
-
-	if !*noBrowser {
-		openBrowser(guiURL)
-	}
-
-	if *configStr != "" {
-		if err := gui.SubmitConfigEncoded(*configStr); err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid --config: %v\n", err)
-			api.Stop()
-			gui.Stop()
-			os.Exit(1)
+		fmt.Println("No pairing code provided, generated defaults and auto-connect enabled.")
+	} else {
+		cfg, err = decodeConfigWithValidation(encoded)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid pairing code: %v\n", err)
+			return ExitCodeParam
 		}
+		fmt.Println("Pairing code accepted, auto-connect enabled.")
 	}
 
-	cfg := gui.WaitForConfig()
-	if cfg == nil {
-		fmt.Println("Stopped by user.")
-		api.Stop()
-		gui.Stop()
-		return
-	}
-
-	fmt.Println("Starting EasyTier...")
-	et := NewEasyTier(func(line string) {
-		gui.AddDebugLog(line)
+	fmt.Printf("Serve network: name=%s secret=%s peers=%s\n", cfg.NetworkName, maskSecret(cfg.NetworkSecret), strings.Join(cfg.Peers, ","))
+	return runSession(sessionOptions{
+		Role:          "server",
+		NoBrowser:     *noBrowser,
+		EncodedConfig: encoded,
 	})
-	if err := et.Start(cfg); err != nil {
-		errCode := classifyEasyTierError(err, et.Logs(), ErrorCodeEasyTierStartFailed)
-		gui.SetState(GUIState{
-			Phase:     "error",
-			APIPort:   apiPort,
-			Error:     fmt.Sprintf("EasyTier failed: %v", err),
-			ErrorCode: errCode,
-		})
-		fmt.Fprintf(os.Stderr, "EasyTier failed: %v\n", err)
-		waitForSignal()
-		et.Stop()
-		api.Stop()
-		gui.Stop()
-		return
-	}
-
-	ip, err := et.WaitForIP(30 * time.Second)
-	if err != nil {
-		errCode := classifyEasyTierError(err, et.Logs(), ErrorCodeEasyTierIPTimeout)
-		errMsg := "Failed to get virtual IP (timeout 30s)"
-		switch errCode {
-		case ErrorCodeWindowsTUNInitFailed:
-			errMsg = "Failed to initialize Windows virtual adapter (TUN)"
-		case ErrorCodeWindowsFirewallBlocked:
-			errMsg = "EasyTier traffic may be blocked by Windows firewall policy"
-		}
-		gui.SetState(GUIState{
-			Phase:     "error",
-			APIPort:   apiPort,
-			Error:     fmt.Sprintf("%s: %v", errMsg, err),
-			ErrorCode: errCode,
-		})
-		fmt.Fprintf(os.Stderr, "Failed to get virtual IP: %v\n", err)
-		waitForSignal()
-		et.Stop()
-		api.Stop()
-		gui.Stop()
-		return
-	}
-
-	fmt.Printf("EasyTier virtual IP: %s\n", ip)
-
-	gui.SetState(GUIState{
-		Phase:   "running",
-		VirtIP:  ip,
-		APIPort: apiPort,
-	})
-	fmt.Printf("API server reachable at http://%s:%d\n", ip, apiPort)
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	stopCh := make(chan struct{}, 1)
-	go func() { <-sig; stopCh <- struct{}{} }()
-	go func() { gui.WaitForConfig(); stopCh <- struct{}{} }() // nil from stop button
-
-	<-stopCh
-	fmt.Println("Shutting down...")
-	api.Stop()
-	et.Stop()
-	gui.Stop()
-}
-
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	cmd.Start()
-}
-
-func waitForSignal() {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
 }

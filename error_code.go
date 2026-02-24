@@ -13,6 +13,10 @@ const (
 	ErrorCodeWindowsFirewallBlocked = "windows_firewall_blocked"
 	ErrorCodeEasyTierStartFailed    = "easytier_start_failed"
 	ErrorCodeEasyTierIPTimeout      = "easytier_ip_timeout"
+	ErrorCodeTUNPermissionDenied    = "tun_permission_denied"
+	ErrorCodeConfigExpired          = "config_expired"
+	ErrorCodeAuthFailed             = "auth_failed"
+	ErrorCodePeerUnreachable        = "peer_unreachable"
 )
 
 type codedError struct {
@@ -52,6 +56,32 @@ func classifyEasyTierErrorByOS(goos string, err error, logs []string, fallback s
 	}
 
 	evidence := strings.ToLower(joinErrorEvidence(err, logs))
+	if containsAnyFold(evidence,
+		"operation not permitted",
+		"permission denied",
+	) && containsAnyFold(evidence, "tun", "wintun", "utun") {
+		return ErrorCodeTUNPermissionDenied
+	}
+	if containsAnyFold(evidence,
+		"auth failed",
+		"authentication failed",
+		"invalid credential",
+		"invalid network secret",
+		"forbidden",
+	) {
+		return ErrorCodeAuthFailed
+	}
+	if containsAnyFold(evidence,
+		"peer unreachable",
+		"no available peer",
+		"connection refused",
+		"no route to host",
+		"network is unreachable",
+		"could not connect to peer",
+	) {
+		return ErrorCodePeerUnreachable
+	}
+
 	if goos == "windows" {
 		if containsAnyFold(evidence,
 			"firewall",

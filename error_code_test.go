@@ -22,6 +22,28 @@ func TestClassifyEasyTierErrorByOS(t *testing.T) {
 			want:     ErrorCodeWindowsNotAdmin,
 		},
 		{
+			name:     "tun permission denied maps to tun_permission_denied",
+			goos:     "darwin",
+			err:      errors.New("timeout waiting for EasyTier virtual IP"),
+			logs:     []string{"tun device error: Operation not permitted"},
+			fallback: ErrorCodeEasyTierIPTimeout,
+			want:     ErrorCodeTUNPermissionDenied,
+		},
+		{
+			name:     "auth keyword maps to auth_failed",
+			goos:     "darwin",
+			err:      errors.New("authentication failed: invalid network secret"),
+			fallback: ErrorCodeEasyTierIPTimeout,
+			want:     ErrorCodeAuthFailed,
+		},
+		{
+			name:     "peer unreachable keyword maps to peer_unreachable",
+			goos:     "linux",
+			err:      errors.New("peer unreachable: connection refused"),
+			fallback: ErrorCodeEasyTierIPTimeout,
+			want:     ErrorCodePeerUnreachable,
+		},
+		{
 			name:     "windows firewall keyword from error",
 			goos:     "windows",
 			err:      errors.New("peer connection blocked by firewall policy"),

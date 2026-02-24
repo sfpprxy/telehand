@@ -100,3 +100,4 @@ jobs:
           files: artifacts/*
           body_path: .github/release-notes/${{ github.ref_name }}.md
           generate_release_notes: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}

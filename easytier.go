@@ -141,7 +141,43 @@ func (et *EasyTier) Start(cfg *Config) error {
 }
 
 type nodeInfo struct {
+	PeerID   any    `json:"peer_id"`
 	IPv4Addr string `json:"ipv4_addr"`
+	Hostname string `json:"hostname"`
+	Version  string `json:"version"`
+}
+
+type rawPeerInfo struct {
+	PeerID   string `json:"id"`
+	IPv4     string `json:"ipv4"`
+	Hostname string `json:"hostname"`
+	Cost     string `json:"cost"`
+	Protocol string `json:"tunnel_proto"`
+	Latency  string `json:"lat_ms"`
+	LossRate string `json:"loss_rate"`
+	Download string `json:"rx_bytes"`
+	Upload   string `json:"tx_bytes"`
+	Version  string `json:"version"`
+}
+
+type PeerInfo struct {
+	VirtualIPv4 string `json:"virtual_ipv4"`
+	Hostname    string `json:"hostname"`
+	RouteCost   string `json:"route_cost"`
+	Protocol    string `json:"protocol"`
+	Latency     string `json:"latency"`
+	Upload      string `json:"upload"`
+	Download    string `json:"download"`
+	LossRate    string `json:"loss_rate"`
+	Version     string `json:"version"`
+	Role        string `json:"role"`
+	IsSelf      bool   `json:"is_self"`
+	PeerID      string `json:"peer_id,omitempty"`
+}
+
+type PeerInfoSnapshot struct {
+	UpdatedAt string     `json:"updated_at"`
+	Peers     []PeerInfo `json:"peers"`
 }
 
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
@@ -161,26 +197,144 @@ func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
 }
 
 func (et *EasyTier) queryIP() (string, error) {
+	info, err := et.queryNodeInfo()
+	if err != nil {
+		return "", err
+	}
+	ip := stripCIDR(info.IPv4Addr)
+	if ip != "" && ip != "0.0.0.0" {
+		return ip, nil
+	}
+	return "", nil
+}
+
+func (et *EasyTier) queryNodeInfo() (*nodeInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "node", "info")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("easytier-cli timed out")
+			return nil, fmt.Errorf("easytier-cli timed out")
 		}
-		return "", fmt.Errorf("easytier-cli error: %v, output=%s", err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("easytier-cli error: %v, output=%s", err, strings.TrimSpace(string(out)))
 	}
 	var info nodeInfo
 	if err := json.Unmarshal(out, &info); err != nil {
-		return "", fmt.Errorf("invalid node info json: %v", err)
+		return nil, fmt.Errorf("invalid node info json: %v", err)
 	}
-	// ipv4_addr is like "10.126.126.2/24", strip the mask
-	ip := strings.Split(info.IPv4Addr, "/")[0]
-	if ip != "" && ip != "0.0.0.0" {
-		return ip, nil
+	return &info, nil
+}
+
+func (et *EasyTier) QueryPeerInfo(role string) (PeerInfoSnapshot, error) {
+	node, err := et.queryNodeInfo()
+	if err != nil {
+		return PeerInfoSnapshot{}, err
 	}
-	return "", nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "peer", "list")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return PeerInfoSnapshot{}, fmt.Errorf("easytier-cli peer list timed out")
+		}
+		return PeerInfoSnapshot{}, fmt.Errorf("easytier-cli peer list error: %v, output=%s", err, strings.TrimSpace(string(out)))
+	}
+
+	var raw []rawPeerInfo
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return PeerInfoSnapshot{}, fmt.Errorf("invalid peer list json: %v", err)
+	}
+
+	peerRole := normalizeRoleLabel(role)
+
+	selfID := peerIDToString(node.PeerID)
+	selfIP := stripCIDR(node.IPv4Addr)
+	peers := make([]PeerInfo, 0, len(raw))
+	for _, p := range raw {
+		virtualIP := strings.TrimSpace(p.IPv4)
+		if virtualIP == "" && p.PeerID == selfID {
+			virtualIP = selfIP
+		}
+		if virtualIP == "" && strings.EqualFold(strings.TrimSpace(p.Hostname), strings.TrimSpace(node.Hostname)) {
+			virtualIP = selfIP
+		}
+		peers = append(peers, PeerInfo{
+			VirtualIPv4: valueOrDash(virtualIP),
+			Hostname:    valueOrDash(p.Hostname),
+			RouteCost:   valueOrDash(p.Cost),
+			Protocol:    valueOrDash(p.Protocol),
+			Latency:     valueOrDash(p.Latency),
+			Upload:      valueOrDash(p.Upload),
+			Download:    valueOrDash(p.Download),
+			LossRate:    valueOrDash(p.LossRate),
+			Version:     valueOrDash(p.Version),
+			Role:        peerRole,
+			IsSelf:      p.PeerID != "" && p.PeerID == selfID,
+			PeerID:      p.PeerID,
+		})
+	}
+
+	if len(peers) == 0 {
+		peers = append(peers, PeerInfo{
+			VirtualIPv4: valueOrDash(selfIP),
+			Hostname:    valueOrDash(node.Hostname),
+			RouteCost:   "Local",
+			Protocol:    "-",
+			Latency:     "-",
+			Upload:      "-",
+			Download:    "-",
+			LossRate:    "-",
+			Version:     valueOrDash(node.Version),
+			Role:        peerRole,
+			IsSelf:      true,
+			PeerID:      selfID,
+		})
+	}
+
+	return PeerInfoSnapshot{
+		UpdatedAt: time.Now().Format(time.RFC3339),
+		Peers:     peers,
+	}, nil
+}
+
+func valueOrDash(v string) string {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func stripCIDR(v string) string {
+	return strings.Split(strings.TrimSpace(v), "/")[0]
+}
+
+func peerIDToString(v any) string {
+	switch t := v.(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", t)
+	case string:
+		return strings.TrimSpace(t)
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", t))
+	}
+}
+
+func normalizeRoleLabel(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "client":
+		return "Client"
+	case "server":
+		return "Server"
+	default:
+		if strings.TrimSpace(role) == "" {
+			return "Unknown"
+		}
+		return strings.TrimSpace(role)
+	}
 }
 
 func (et *EasyTier) Logs() []string {

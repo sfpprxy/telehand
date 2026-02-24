@@ -7,8 +7,9 @@
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-.container { background: #fff; border-radius: 12px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); padding: 40px; width: 560px; text-align: center; }
-h1 { font-size: 22px; margin-bottom: 8px; }
+.container { background: #fff; border-radius: 12px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); padding: 28px; width: min(1080px, 96vw); text-align: center; }
+h1 { font-size: 24px; margin-bottom: 4px; }
+.role-subtitle { color: #6a778b; font-size: 13px; margin-bottom: 16px; }
 .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
 textarea { width: 100%; height: 80px; border: 2px solid #ddd; border-radius: 8px; padding: 12px; font-size: 14px; resize: none; font-family: monospace; }
 textarea:focus { outline: none; border-color: #4a90d9; }
@@ -19,12 +20,12 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .btn-danger { background: #e74c3c; color: #fff; }
 .btn-danger:hover { background: #c0392b; }
 .ip-box { background: #f0f7ff; border: 2px solid #4a90d9; border-radius: 8px; padding: 16px; margin: 16px 0; display: flex; align-items: center; justify-content: center; gap: 12px; }
-.ip-text { font-size: 24px; font-weight: bold; font-family: monospace; color: #2c3e50; }
+.ip-text { font-size: 22px; font-weight: bold; font-family: monospace; color: #2c3e50; word-break: break-all; }
 .btn-copy { padding: 6px 16px; font-size: 13px; background: #4a90d9; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .btn-copy:hover { background: #357abd; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 .dot-green { background: #2ecc71; }
-.log-area { text-align: left; background: #1e1e1e; color: #d4d4d4; border-radius: 8px; padding: 12px; margin-top: 16px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+.log-area { text-align: left; background: #1e1e1e; color: #d4d4d4; border-radius: 8px; padding: 12px; margin-top: 16px; height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px; }
 .log-line { padding: 2px 0; }
 .log-time { color: #888; }
 .log-method { color: #4a90d9; }
@@ -32,15 +33,36 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .debug-section { margin-top: 20px; text-align: left; }
 .debug-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .debug-title { font-size: 13px; color: #888; }
-.debug-area { background: #0d1117; color: #8b949e; border-radius: 8px; padding: 12px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+.debug-area { background: #0d1117; color: #8b949e; border-radius: 8px; padding: 12px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
 .phase-connecting { color: #f39c12; }
 .error { color: #e74c3c; margin-top: 12px; }
 .hidden { display: none; }
+.cmd-section { text-align: left; background: #f9f6ee; border: 1px solid #edd9a4; border-radius: 8px; padding: 12px; margin-top: 14px; }
+.cmd-title { color: #7a6130; font-size: 13px; margin-bottom: 8px; }
+.cmd-row { margin-bottom: 8px; }
+.cmd-platform { font-size: 12px; color: #666; margin-bottom: 4px; }
+.cmd-text { font-family: monospace; background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px; font-size: 12px; word-break: break-all; }
+.peer-section { margin-top: 18px; text-align: left; }
+.peer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.peer-title { font-size: 14px; color: #555; }
+.peer-updated { font-size: 12px; color: #8a8a8a; }
+.peer-wrap { overflow-x: auto; border: 1px solid #ddd; border-radius: 8px; }
+.peer-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 940px; }
+.peer-table th, .peer-table td { border-bottom: 1px solid #eee; padding: 7px 8px; text-align: left; white-space: nowrap; }
+.peer-table th { background: #f7f8fb; color: #4a4a4a; }
+.peer-self { background: #f0f9ff; }
+.peer-hint { font-size: 12px; color: #888; margin-top: 8px; }
+@media (max-width: 640px) {
+  .container { padding: 16px; }
+  .ip-box { flex-direction: column; }
+  .ip-text { font-size: 18px; }
+}
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Telehand</h1>
+  <p id="role-subtitle" class="role-subtitle">角色: 未知</p>
 
   <div id="phase-config">
     <p class="subtitle">请将对方发给你的配置码粘贴到下方</p>
@@ -67,7 +89,43 @@ textarea:focus { outline: none; border-color: #4a90d9; }
       <button class="btn-copy" onclick="copyIP(this)">复制</button>
     </div>
     <p style="color:#888;font-size:13px;" id="port-info"></p>
-    <p style="color:#888;font-size:13px;margin-top:4px;">请将上方 IP 发送给对方</p>
+    <p style="color:#888;font-size:13px;margin-top:4px;" id="running-hint">请将上方 IP 发送给对方</p>
+
+    <div id="command-section" class="cmd-section hidden">
+      <div class="cmd-title">在被控端执行以下命令（可复制）</div>
+      <div id="command-list"></div>
+      <button class="btn-copy" id="btn-copy-command" onclick="copyPreferredCommand(this)">复制推荐命令</button>
+    </div>
+
+    <div class="peer-section">
+      <div class="peer-header">
+        <span class="peer-title">Peer Info</span>
+        <span class="peer-updated" id="peer-updated">-</span>
+      </div>
+      <div class="peer-wrap">
+        <table class="peer-table">
+          <thead>
+            <tr>
+              <th>Virtual IPv4</th>
+              <th>Hostname</th>
+              <th>Route Cost</th>
+              <th>Protocol</th>
+              <th>Latency</th>
+              <th>Upload</th>
+              <th>Download</th>
+              <th>Loss Rate</th>
+              <th>Version</th>
+              <th>Role</th>
+              <th>Local</th>
+            </tr>
+          </thead>
+          <tbody id="peer-table-body">
+            <tr><td colspan="11" class="peer-hint">等待网络数据...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="log-area" id="log-area"></div>
     <div class="debug-section">
       <div class="debug-header">
@@ -96,12 +154,16 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 <script>
 const CONFIG_CODE_KEY = 'telehand_config_code';
 let currentPhase = 'config';
+let currentState = {};
 let statePollTimer = null;
 let logPollTimer = null;
 let debugPollTimer = null;
+let peerPollTimer = null;
 let cachedDebugLogs = [];
+let preferredCommand = '';
 
 function normalizePhase(phase) {
+  if (phase === 'init') return 'config';
   return ['config', 'connecting', 'running', 'error'].includes(phase) ? phase : 'config';
 }
 
@@ -120,6 +182,11 @@ function startDebugPoller() {
   debugPollTimer = setInterval(pollDebugLogs, 1000);
 }
 
+function startPeerPoller() {
+  if (peerPollTimer !== null) return;
+  peerPollTimer = setInterval(pollPeerInfo, 3000);
+}
+
 function stopLogPoller() {
   if (logPollTimer !== null) {
     clearInterval(logPollTimer);
@@ -134,6 +201,13 @@ function stopDebugPoller() {
   }
 }
 
+function stopPeerPoller() {
+  if (peerPollTimer !== null) {
+    clearInterval(peerPollTimer);
+    peerPollTimer = null;
+  }
+}
+
 function stopAllPollers() {
   if (statePollTimer !== null) {
     clearInterval(statePollTimer);
@@ -141,6 +215,7 @@ function stopAllPollers() {
   }
   stopLogPoller();
   stopDebugPoller();
+  stopPeerPoller();
 }
 
 function syncPollersByPhase(phase) {
@@ -148,15 +223,18 @@ function syncPollersByPhase(phase) {
   if (phase === 'running') {
     startLogPoller();
     startDebugPoller();
+    startPeerPoller();
     return;
   }
   if (phase === 'connecting' || phase === 'error') {
     stopLogPoller();
     startDebugPoller();
+    stopPeerPoller();
     return;
   }
   stopLogPoller();
   stopDebugPoller();
+  stopPeerPoller();
 }
 
 function restoreConfigInputFromSession() {
@@ -183,15 +261,61 @@ function clearConfigInputSession() {
   } catch (e) {}
 }
 
+function renderRole(state) {
+  const role = state && state.role ? state.role : 'unknown';
+  document.getElementById('role-subtitle').textContent = '角色: ' + role;
+  const hint = document.getElementById('running-hint');
+  if (role === 'client') {
+    hint.textContent = '控制端已连接，请把下方命令发给被控端执行。';
+  } else {
+    hint.textContent = '请将上方 IP 发送给对方';
+  }
+}
+
 function renderRunning(state) {
+  renderRole(state);
   const virtIP = state && state.virt_ip ? state.virt_ip : '';
   const apiPort = state && typeof state.api_port === 'number' ? state.api_port : 0;
   const endpoint = virtIP && apiPort ? virtIP + ':' + apiPort : '';
   document.getElementById('virt-ip').textContent = endpoint;
   document.getElementById('port-info').textContent = endpoint ? ('API 地址: http://' + endpoint) : '';
+  renderCommands(state);
+}
+
+function renderCommands(state) {
+  const section = document.getElementById('command-section');
+  const list = document.getElementById('command-list');
+  list.innerHTML = '';
+
+  const commands = state && Array.isArray(state.commands) ? state.commands : [];
+  preferredCommand = state && state.clipboard_command ? state.clipboard_command : '';
+  if (commands.length === 0) {
+    section.classList.add('hidden');
+    return;
+  }
+
+  commands.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'cmd-row';
+
+    const platform = document.createElement('div');
+    platform.className = 'cmd-platform';
+    platform.textContent = item.platform || '未知平台';
+
+    const cmd = document.createElement('div');
+    cmd.className = 'cmd-text';
+    cmd.textContent = item.command || '';
+
+    row.appendChild(platform);
+    row.appendChild(cmd);
+    list.appendChild(row);
+  });
+
+  section.classList.remove('hidden');
 }
 
 function renderError(state) {
+  renderRole(state);
   const message = state && state.error ? state.error : '未知错误';
   document.getElementById('error-msg').textContent = message;
 
@@ -213,27 +337,62 @@ function setPhase(phase, state) {
   if (normalized === 'config') {
     document.getElementById('btn-start').disabled = false;
     restoreConfigInputFromSession();
+    renderRole(state || {});
   } else if (normalized === 'running') {
-    renderRunning(state);
+    renderRunning(state || {});
   } else if (normalized === 'error') {
-    renderError(state);
+    renderError(state || {});
+  } else if (normalized === 'connecting') {
+    renderRole(state || {});
   }
 
   syncPollersByPhase(normalized);
 }
 
 function applyServerState(state) {
-  const nextPhase = normalizePhase(state && state.phase);
+  currentState = state || {};
+  const nextPhase = normalizePhase(currentState.phase);
   if (nextPhase !== currentPhase) {
-    setPhase(nextPhase, state);
+    setPhase(nextPhase, currentState);
     return;
   }
 
   if (nextPhase === 'running') {
-    renderRunning(state);
+    renderRunning(currentState);
   } else if (nextPhase === 'error') {
-    renderError(state);
+    renderError(currentState);
+  } else {
+    renderRole(currentState);
   }
+}
+
+function renderPeerInfo(snapshot) {
+  const body = document.getElementById('peer-table-body');
+  if (!snapshot || !Array.isArray(snapshot.peers) || snapshot.peers.length === 0) {
+    body.innerHTML = '<tr><td colspan="11" class="peer-hint">等待网络数据...</td></tr>';
+    document.getElementById('peer-updated').textContent = '-';
+    return;
+  }
+
+  body.innerHTML = snapshot.peers.map((p) => {
+    const cls = p.is_self ? 'peer-self' : '';
+    const local = p.is_self ? '*' : '';
+    return '<tr class="' + cls + '">' +
+      '<td>' + escapeHtml(p.virtual_ipv4 || '-') + '</td>' +
+      '<td>' + escapeHtml(p.hostname || '-') + '</td>' +
+      '<td>' + escapeHtml(p.route_cost || '-') + '</td>' +
+      '<td>' + escapeHtml(p.protocol || '-') + '</td>' +
+      '<td>' + escapeHtml(p.latency || '-') + '</td>' +
+      '<td>' + escapeHtml(p.upload || '-') + '</td>' +
+      '<td>' + escapeHtml(p.download || '-') + '</td>' +
+      '<td>' + escapeHtml(p.loss_rate || '-') + '</td>' +
+      '<td>' + escapeHtml(p.version || '-') + '</td>' +
+      '<td>' + escapeHtml(p.role || '-') + '</td>' +
+      '<td>' + local + '</td>' +
+      '</tr>';
+  }).join('');
+
+  document.getElementById('peer-updated').textContent = snapshot.updated_at ? ('更新时间: ' + snapshot.updated_at) : '-';
 }
 
 async function hydrateState() {
@@ -257,6 +416,7 @@ async function boot() {
   }
   if (currentPhase === 'running') {
     await pollLogs();
+    await pollPeerInfo();
   }
 }
 
@@ -325,8 +485,29 @@ async function pollDebugLogs() {
   } catch(e) {}
 }
 
+async function pollPeerInfo() {
+  try {
+    const resp = await fetch('/api/peer-info');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.error) return;
+    renderPeerInfo(data);
+  } catch (e) {}
+}
+
 function copyDebugLogs(btn) {
   const text = cachedDebugLogs.join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+function copyPreferredCommand(btn) {
+  const text = preferredCommand || '';
+  if (!text) return;
   navigator.clipboard.writeText(text).then(() => {
     if (!btn) return;
     const orig = btn.textContent;
