@@ -5,12 +5,39 @@
 
 # 0.2.0 核心目标：组网方式优化
 目标分解：
-- [ ] 实现被控端 telehand -server -join-network 配对码
+- [ ] 抽公共函数层（复用优先）
+  - [ ] 抽取 `buildConfigFromInputs(networkName, networkSecret, peers)` 纯函数（不 `os.Exit`）
+  - [ ] 抽取 `encodeConfigOrErr(cfg *Config)`，统一复用 `EncodeConfig`
+  - [ ] 抽取 `submitEncodedConfig(encoded string)`，统一复用 `GUIServer.SubmitConfigEncoded`
+  - [ ] `runGenConfig` 与 `runConnect` 复用同一组公共函数
+  - [ ] `runServe --config` 与 `runServe` 的新参数路径复用同一提交函数
+- [ ] 新增 CLI 入口（调用公共函数）
+  - [ ] 新增 `telehand connect [配对码]`
+  - [ ] 新增 `telehand serve [配对码]`
+  - [ ] 保持当前 `serve` / `gen-config` 兼容
+    - [ ] 旧命令 `serve` / `gen-config` 保持可用，原参数不破坏
+    - [ ] 新旧命令走同一业务函数，输出与返回码保持一致
+    - [ ] 补充兼容性验收：同参数下新旧命令产出结果一致
+- [ ] secret 尽可能脱敏（日志/屏幕等展示仅显示部分字符）
+- [ ] 实现控制端 telehand connect
+  - [ ] `connect` 时支持以下参数 --network-name <telehand:本机hostname> --network-secret <telehand:本机hostname+随机4位数> --peers `默认使用tcp://39.108.52.138:11010`
+  - [ ] 未提供配对码时按既定默认规则自动生成 network 参数并连接
+  - [ ] 参数生成规则
+    - [ ] `--network-name` 默认 `telehand:<hostname>`
+    - [ ] `--network-secret` 默认 `telehand:<hostname+随机4位数>`
+    - [ ] `--peers` 默认 `tcp://39.108.52.138:11010`（允许显式覆盖）
+  - [ ] 可用性与安全性
+    - [ ] hostname 读取失败时回退策略（固定前缀+随机4位数后缀）
+  - [ ] `connect` 输出契约
+    - [ ] 标准输出包含可直接在被控端执行的命令类似 `iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 | iex; .\telehand.exe serve 配对码` (这里不脱敏) 并复制命令至剪贴板方便粘贴；同时包含多平台
+    - [ ] 返回码约定：成功0，参数错误/网络错误/服务错误分级
+- [ ] 实现被控端 telehand serve 配对码
   - [ ] 如果在被控机上能检测到默认浏览器，则默认浏览器打开web gui及相关界面(且界面信息随实际连接状态而变化，连接成功后的显示内容和0.1.5一样)，此时不需要手动再在web中手动复制粘贴并连接了，因为执行命令时已经做了;如果在被控机是无GUI环境(比如linux服务器)或者无默认浏览器，则所有信息都在终端cli输出/显示
   - [ ] CLI 参数与执行链路
-    - [ ] 定义 `-join-network` 参数格式（支持直接粘贴配对码）
+    - [ ] 定义 `serve` 参数格式（支持直接粘贴配对码）
+    - [ ] 未提供配对码时按既定默认规则自动生成 network 参数并连接
     - [ ] 启动时完成参数校验（缺参/格式错误/过期码）
-    - [ ] 参数合法时自动触发 join，不再依赖 Web 手动粘贴
+    - [ ] 参数合法时自动触发连接，不再依赖 Web 手动粘贴
   - [ ] 连接状态机
     - [ ] 状态：初始化 -> 连接中 -> 已连接 -> 失败重试/退出
     - [ ] 状态变化统一事件源（CLI 与 Web 复用同一状态）
@@ -23,17 +50,6 @@
     - [ ] 终端完整输出当前状态、下一步提示与错误原因
     - [ ] 提供可复制命令/日志位置，便于远程排障
     - [ ] 支持无交互运行（systemd/docker）仅通过 stdout/stderr 观测
-- [ ] 实现控制端 telehand -client -create-network
-  - [ ] create-network 时使用的参数如下 --network-name <telehand:本机hostname> --network-secret <telehand:本机hostname+随机4位数> --peers `默认使用tcp://39.108.52.138:11010`
-  - [ ] 参数生成规则
-    - [ ] `--network-name` 默认 `telehand:<hostname>`
-    - [ ] `--network-secret` 默认 `telehand:<hostname+随机4位数>`
-    - [ ] `--peers` 默认 `tcp://39.108.52.138:11010`（允许显式覆盖）
-  - [ ] 可用性与安全性
-    - [ ] hostname 读取失败时回退策略（固定前缀+随机4位数后缀）
-  - [ ] create-network 输出契约
-    - [ ] 标准输出包含可直接在被控端执行的命令类似 `iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 | iex; .\telehand.exe -server -join-network 配对码` (这里不脱敏) 并复制命令至剪贴板方便粘贴；同时包含多平台
-    - [ ] 返回码约定：成功0，参数错误/网络错误/服务错误分级
 - [ ] 网络信息展示（终端/Web）
   - [ ] 统一 PeerInfo 展示字段与数据源
     - [ ] 字段对齐 UI：Virtual IPv4 / Hostname / Route Cost / Protocol / Latency / Upload / Download / Loss Rate / Version
@@ -46,9 +62,8 @@
   - [ ] 被控端（server）
     - [ ] 终端输出当前网络信息（节点列表 + PeerInfo）
     - [ ] Web 端（如有）同样展示 Peer Info 表格并自动刷新
-- [ ] secret 尽可能脱敏（日志/屏幕等展示仅显示部分字符）
 - [ ] 联调验收
-  - [ ] 控制端 create-network -> 被控端 join-network 一次成功链路
+  - [ ] 控制端 connect -> 被控端 serve 一次成功链路
   - [ ] 有 GUI 与无 GUI 两种环境各跑一轮冒烟
   - [ ] 验收网络信息展示：控制端/被控端在终端与 Web（如有）均能看到节点列表与 PeerInfo，字段齐全且刷新正常
   - [ ] 回归 0.1.5 行为一致性（连接成功后的界面与提示）
