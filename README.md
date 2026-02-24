@@ -18,26 +18,26 @@ Windows（PowerShell）：
 iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 | iex; .\telehand.exe
 ```
 
-macOS：
+macOS / Linux：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && ./telehand
+curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand
 ```
 
 ### 安装指定版本（例如 alpha）
 
-版本参数必须带 `v` 前缀（例如 `v0.2.0-alpha.1`）。
+版本参数必须带 `v` 前缀（例如 `v0.2.0-alpha.3`）。
 
 Windows（PowerShell，脚本文件方式）：
 
 ```powershell
-iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Version v0.2.0-alpha.1; .\telehand.exe
+iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Version v0.2.0-alpha.3; .\telehand.exe
 ```
 
 macOS / Linux：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash -s -- --version v0.2.0-alpha.1 && ./telehand
+curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash -s -- --version v0.2.0-alpha.3 && sudo ./telehand
 ```
 
 ### Windows 手动下载详细步骤（GUI）
@@ -70,6 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | 
 1. 一直停在“正在连接网络，请稍候...”
 - 先等 30 秒。
 - Windows 尝试“以管理员身份运行”。
+- macOS / Linux 使用 `sudo` 启动（例如：`sudo ./telehand`）。
 - 检查防火墙弹窗是否已允许。
 
 2. 页面打不开

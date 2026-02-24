@@ -84,12 +84,8 @@ func buildRemoteInstallCommands(pairingCode string) []InstallCommand {
 			Command:  fmt.Sprintf("iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 | iex; .\\telehand.exe serve '%s'", code),
 		},
 		{
-			Platform: "macOS",
-			Command:  fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && ./telehand serve '%s'", code),
-		},
-		{
-			Platform: "Linux",
-			Command:  fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && ./telehand serve '%s'", code),
+			Platform: "macOS / Linux",
+			Command:  fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand serve '%s'", code),
 		},
 	}
 }

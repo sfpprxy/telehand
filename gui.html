@@ -42,6 +42,7 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .cmd-row { margin-bottom: 8px; }
 .cmd-platform { font-size: 12px; color: #666; margin-bottom: 4px; }
 .cmd-text { font-family: monospace; background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px; font-size: 12px; word-break: break-all; }
+.cmd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .peer-section { margin-top: 18px; text-align: left; }
 .peer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .peer-title { font-size: 14px; color: #555; }
@@ -94,7 +95,10 @@ textarea:focus { outline: none; border-color: #4a90d9; }
     <div id="command-section" class="cmd-section hidden">
       <div class="cmd-title">在被控端执行以下命令（可复制）</div>
       <div id="command-list"></div>
-      <button class="btn-copy" id="btn-copy-command" onclick="copyPreferredCommand(this)">复制推荐命令</button>
+      <div class="cmd-actions">
+        <button class="btn-copy hidden" id="btn-copy-command-windows" onclick="copyCommandByType('windows', this)">复制 Windows 命令</button>
+        <button class="btn-copy hidden" id="btn-copy-command-unix" onclick="copyCommandByType('unix', this)">复制 macOS/Linux 命令</button>
+      </div>
     </div>
 
     <div class="peer-section">
@@ -160,7 +164,8 @@ let logPollTimer = null;
 let debugPollTimer = null;
 let peerPollTimer = null;
 let cachedDebugLogs = [];
-let preferredCommand = '';
+let windowsCommand = '';
+let unixCommand = '';
 
 function normalizePhase(phase) {
   if (phase === 'init') return 'config';
@@ -285,16 +290,58 @@ function renderRunning(state) {
 function renderCommands(state) {
   const section = document.getElementById('command-section');
   const list = document.getElementById('command-list');
+  const windowsBtn = document.getElementById('btn-copy-command-windows');
+  const unixBtn = document.getElementById('btn-copy-command-unix');
   list.innerHTML = '';
 
   const commands = state && Array.isArray(state.commands) ? state.commands : [];
-  preferredCommand = state && state.clipboard_command ? state.clipboard_command : '';
+  windowsCommand = '';
+  unixCommand = '';
   if (commands.length === 0) {
+    windowsBtn.classList.add('hidden');
+    unixBtn.classList.add('hidden');
     section.classList.add('hidden');
     return;
   }
 
+  const rows = [];
+  const extraRows = [];
   commands.forEach((item) => {
+    const platform = item && item.platform ? String(item.platform).trim() : '';
+    const command = item && item.command ? String(item.command).trim() : '';
+    if (!command) return;
+
+    const platformLower = platform.toLowerCase();
+    if (!windowsCommand && platformLower.includes('windows')) {
+      windowsCommand = command;
+      return;
+    }
+    if (!unixCommand && (platformLower.includes('mac') || platformLower.includes('linux'))) {
+      unixCommand = command;
+      return;
+    }
+    extraRows.push({
+      platform: platform || '未知平台',
+      command: command,
+    });
+  });
+
+  if (windowsCommand) {
+    rows.push({platform: 'Windows (PowerShell)', command: windowsCommand});
+  }
+  if (unixCommand) {
+    rows.push({platform: 'macOS / Linux', command: unixCommand});
+  }
+  rows.push(...extraRows);
+
+  if (rows.length === 0) {
+    windowsBtn.classList.add('hidden');
+    unixBtn.classList.add('hidden');
+    section.classList.add('hidden');
+    return;
+  }
+
+  rows.forEach((item) => {
     const row = document.createElement('div');
     row.className = 'cmd-row';
 
@@ -311,6 +358,8 @@ function renderCommands(state) {
     list.appendChild(row);
   });
 
+  windowsBtn.classList.toggle('hidden', !windowsCommand);
+  unixBtn.classList.toggle('hidden', !unixCommand);
   section.classList.remove('hidden');
 }
 
@@ -505,8 +554,8 @@ function copyDebugLogs(btn) {
   });
 }
 
-function copyPreferredCommand(btn) {
-  const text = preferredCommand || '';
+function copyCommandByType(type, btn) {
+  const text = type === 'windows' ? windowsCommand : unixCommand;
   if (!text) return;
   navigator.clipboard.writeText(text).then(() => {
     if (!btn) return;

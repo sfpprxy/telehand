@@ -1,5 +1,9 @@
 阅读 file:///Users/joe/Sync/Work/handoffs/telehand-handoff.md 并准备实现&发布 0.2.0
 
+# 实现规则
+
+自底向上的进行实现, 完成一个子任务后就用 Markdown 语法标记完成。但是如果在任何过程中遇到了问题，则在子任务下新建一个子任务并描述问题，解决完问题也标记完成。一般来说现有的任务内容不需要改动，如需改动停下来征求我同意。
+
 # 0.1.5现状
 被控端运行后目前的行为是自动打开浏览器并展示配置码的粘贴页面 "请将对方发给你的配置码粘贴到下方"，配置码是由控制端生成并交给被控端的。
 
@@ -30,6 +34,7 @@
     - [x] hostname 读取失败时回退策略（固定前缀+随机4位数后缀）
   - [x] `connect` 输出契约
     - [x] 标准输出包含可直接在被控端执行的命令类似 `iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 | iex; .\telehand.exe serve 配对码` (这里不脱敏) 并复制命令至剪贴板方便粘贴；同时包含多平台
+    - [x] 问题：macOS / Linux 侧命令未体现 TUN 需要 root 权限。已统一在 README 与 `connect` 输出命令中补充 `sudo`（`sudo ./telehand` / `sudo ./telehand serve ...`）。
     - [x] 返回码约定：成功0，参数错误/网络错误/服务错误分级
 - [x] 实现被控端 telehand serve 配对码
   - [x] 如果在被控机上能检测到默认浏览器，则默认浏览器打开web gui及相关界面(且界面信息随实际连接状态而变化，连接成功后的显示内容和0.1.5一样)，此时不需要手动再在web中手动复制粘贴并连接了，因为执行命令时已经做了;如果在被控机是无GUI环境(比如linux服务器)或者无默认浏览器，则所有信息都在终端cli输出/显示
@@ -44,6 +49,10 @@
     - [x] 错误码与错误文案对齐（超时、鉴权失败、peer 不可达）
   - [x] GUI 场景（有默认浏览器）
     - [x] 自动打开 Web GUI 到状态页
+      - [x] 问题：macOS 默认浏览器设置为 Arc 时，telehand 仍打开 Safari；默认浏览器探测/调用逻辑可能有误，需修复为严格跟随系统默认浏览器。
+        - [x] 底层实现：`openBrowser` 在 macOS 且 `sudo` 提权场景下，改为以 `SUDO_USER` 用户上下文执行 `open`，避免 root 上下文打开 Safari。
+        - [x] 单测覆盖：新增 `platform_util_test.go`，覆盖普通用户、`sudo` 场景、`sudo` 缺失回退、Linux 无显示环境校验。
+        - [x] 验证：`go test ./...` 全量通过。
     - [x] 页面按连接状态动态切换文案与操作按钮
     - [x] 连接成功后页面显示与 0.1.5 保持一致
   - [x] 无 GUI/无默认浏览器场景
@@ -59,6 +68,7 @@
     - [x] 终端输出当前网络信息（节点列表 + PeerInfo）
     - [x] Web GUI 展示 Peer Info 表格（节点列表、关键指标、自动刷新）
     - [x] Web GUI 中可以一键复制：在被控端执行的命令
+      - [x] 问题：运行中页面只有一个“复制推荐命令”按钮，且 macOS 与 Linux 分开显示；已调整为两个复制按钮（Windows / macOS-Linux）并将平台命名合并为 `macOS / Linux`。
   - [x] 被控端（server）
     - [x] 终端输出当前网络信息（节点列表 + PeerInfo）
     - [x] Web 端（如有）同样展示 Peer Info 表格并自动刷新

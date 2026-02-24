@@ -9,32 +9,58 @@ import (
 	"strings"
 )
 
+var lookPath = exec.LookPath
+
 func openBrowser(url string) error {
+	cmd, err := buildOpenBrowserCommand(
+		runtime.GOOS,
+		url,
+		os.Geteuid(),
+		os.Getenv("SUDO_USER"),
+		os.Getenv("DISPLAY"),
+		os.Getenv("WAYLAND_DISPLAY"),
+	)
+	if err != nil {
+		return err
+	}
+	return cmd.Start()
+}
+
+func buildOpenBrowserCommand(goos, url string, euid int, sudoUser, display, waylandDisplay string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
-	switch runtime.GOOS {
+	switch goos {
 	case "darwin":
-		path, err := exec.LookPath("open")
+		openPath, err := lookPath("open")
 		if err != nil {
-			return err
+			return nil, err
 		}
-		cmd = exec.Command(path, url)
+		if euid == 0 && strings.TrimSpace(sudoUser) != "" {
+			// When telehand is started via sudo on macOS, run `open` as the original user
+			// so LaunchServices resolves the same default browser seen in System Settings.
+			sudoPath, sudoErr := lookPath("sudo")
+			if sudoErr == nil {
+				cmd = exec.Command(sudoPath, "-u", strings.TrimSpace(sudoUser), openPath, url)
+				return cmd, nil
+			}
+		}
+		cmd = exec.Command(openPath, url)
 	case "windows":
-		path, err := exec.LookPath("cmd")
+		path, err := lookPath("cmd")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		cmd = exec.Command(path, "/c", "start", "", url)
 	default:
-		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
-			return errors.New("DISPLAY/WAYLAND_DISPLAY is empty")
+		if display == "" && waylandDisplay == "" {
+			return nil, errors.New("DISPLAY/WAYLAND_DISPLAY is empty")
 		}
-		path, err := exec.LookPath("xdg-open")
+		path, err := lookPath("xdg-open")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		cmd = exec.Command(path, url)
 	}
-	return cmd.Start()
+	return cmd, nil
 }
 
 func copyToClipboard(text string) error {
@@ -69,7 +95,7 @@ func copyToClipboard(text string) error {
 }
 
 func runClipboardCommand(name string, args []string, input string) error {
-	path, err := exec.LookPath(name)
+	path, err := lookPath(name)
 	if err != nil {
 		return err
 	}

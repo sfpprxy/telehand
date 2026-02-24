@@ -304,7 +304,7 @@ POST /patch {"path": "...", "old": "foo", "new": "bar"}
 - 调试验证优先使用普通目录（如 `C:/Users/Public/telehand-sandbox-*`），避免系统目录（如 `C:/Windows/*`）
 - `/exec` 的 `cmd` 在 Windows 上通过 `powershell.exe -Command` 执行
 - `/exec` 的 `cmd` 在 macOS 上通过默认 shell（通常 zsh）的 `-c` 执行
-- `telehand serve --config <base64>` 可在启动后自动进入连网流程（无需 GUI 手输）
+- `telehand serve --config <base64>` 可在启动后自动进入连网流程（无需 GUI 手输）；macOS / Linux 侧建议使用 `sudo telehand serve --config <base64>`
 - `telehand serve --no-browser` 可禁用自动打开浏览器，适合远程无头场景
 - 文件编码统一为 UTF-8
 - `/read` 的 `offset` 是 0-based，`/edit` 的 `start_line` 是 1-based

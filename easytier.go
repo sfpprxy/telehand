@@ -183,6 +183,10 @@ type PeerInfoSnapshot struct {
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		if err := et.detectFatalWaitError(); err != nil {
+			return "", err
+		}
+
 		ip, err := et.queryIP()
 		if ip != "" {
 			et.VirtIP = ip
@@ -191,9 +195,28 @@ func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
 		if err != nil && et.onLog != nil {
 			et.onLog(fmt.Sprintf("[telehand] queryIP failed: %v", err))
 		}
+
+		if err := et.detectFatalWaitError(); err != nil {
+			return "", err
+		}
 		time.Sleep(2 * time.Second)
 	}
+
+	if err := et.detectFatalWaitError(); err != nil {
+		return "", err
+	}
 	return "", fmt.Errorf("timeout waiting for EasyTier virtual IP")
+}
+
+func (et *EasyTier) detectFatalWaitError() error {
+	code := classifyEasyTierError(nil, et.Logs(), "")
+	if code == ErrorCodeTUNPermissionDenied {
+		return newCodedError(
+			ErrorCodeTUNPermissionDenied,
+			"TUN permission denied (please run with administrator/root privilege)",
+		)
+	}
+	return nil
 }
 
 func (et *EasyTier) queryIP() (string, error) {
