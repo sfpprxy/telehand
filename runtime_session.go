@@ -47,6 +47,7 @@ type runningGuardConfig struct {
 type candidateCheckResult struct {
 	peerReady           bool
 	nonSelfPresent      bool
+	peerClass           string
 	probeSuccess        bool
 	peerQueryFailures   int
 	routeMismatchDetail string
@@ -64,7 +65,7 @@ var (
 	defaultCandidateCheckConfig = candidateCheckConfig{
 		maxChecks:   3,
 		window:      5 * time.Second,
-		step:        1500 * time.Millisecond,
+		step:        3 * time.Second,
 		probeTimout: 800 * time.Millisecond,
 	}
 	defaultRunningGuardConfig = runningGuardConfig{
@@ -294,8 +295,8 @@ connectLoop:
 			lastCode = ""
 			break connectLoop
 		}
-		if strings.EqualFold(role, "client") && checkResult.nonSelfPresent && checkResult.peerQueryFailures == 0 {
-			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, "pass", "peer_waiting_virtual_ip", "non-self peer present but virtual ip not ready; allow running for first join")
+		if strings.EqualFold(role, "client") && checkResult.peerClass == peerClassBootstrapOnly && checkResult.peerQueryFailures == 0 {
+			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, "pass", "bootstrap_connected", "bootstrap peer connected; allow running for first join")
 			lastErr = nil
 			lastCode = ""
 			break connectLoop
@@ -482,9 +483,16 @@ func evaluateCandidateConnectivity(
 
 		result.peerReady = readiness.Ready
 		result.nonSelfPresent = result.nonSelfPresent || readiness.NonSelfPresent
+		if readiness.PeerClass != "" && readiness.PeerClass != peerClassNone {
+			result.peerClass = readiness.PeerClass
+		}
 		if !result.peerReady {
-			if readiness.NonSelfPresent {
-				logFn("warn", "peer_waiting_virtual_ip", "non-self peer present but virtual ip not ready")
+			if readiness.PeerClass == peerClassBootstrapOnly {
+				logFn("warn", "bootstrap_connected", fmt.Sprintf("bootstrap peer connected id=%s hostname=%s, business endpoint not ready", readiness.PeerID, readiness.PeerHostname))
+			} else if readiness.PeerClass == peerClassBusinessPeerWaitingIP {
+				logFn("warn", "business_endpoint_waiting", "peer connected but virtual ip not ready")
+			} else if readiness.NonSelfPresent {
+				logFn("warn", "business_endpoint_waiting", "non-self peer present but virtual ip not ready")
 			} else {
 				logFn("warn", "peer_not_ready", "peer list empty")
 			}
@@ -563,9 +571,19 @@ func runRunningStateGuard(
 			reason = "peer_query_failed"
 			detail = err.Error()
 		} else if !readiness.Ready {
+			if readiness.PeerClass == peerClassBootstrapOnly {
+				failures = 0
+				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "bootstrap_connected", fmt.Sprintf("bootstrap peer connected id=%s hostname=%s, business endpoint not ready", readiness.PeerID, readiness.PeerHostname))
+				continue
+			}
+			if readiness.PeerClass == peerClassBusinessPeerWaitingIP {
+				failures = 0
+				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "business_endpoint_waiting", "peer connected but virtual ip not ready")
+				continue
+			}
 			if readiness.NonSelfPresent {
 				failures = 0
-				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "peer_waiting_virtual_ip", "non-self peer present but virtual ip not ready")
+				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "business_endpoint_waiting", "non-self peer present but virtual ip not ready")
 				continue
 			}
 			failed = true

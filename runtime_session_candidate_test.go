@@ -133,7 +133,13 @@ func TestEvaluateCandidateConnectivityNonSelfPeerWithoutVirtualIP(t *testing.T) 
 	}
 	deps := sessionDeps{
 		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
-			return PeerReadiness{Ready: false, NonSelfPresent: true}, nil
+			return PeerReadiness{
+				Ready:          false,
+				NonSelfPresent: true,
+				PeerClass:      peerClassBootstrapOnly,
+				PeerID:         "123",
+				PeerHostname:   "PublicServer_Test",
+			}, nil
 		},
 		routeInterfaceForTarget: func(string) (string, error) { return "", nil },
 		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
@@ -147,10 +153,49 @@ func TestEvaluateCandidateConnectivityNonSelfPeerWithoutVirtualIP(t *testing.T) 
 	if !got.nonSelfPresent {
 		t.Fatalf("expected nonSelfPresent=true, got %+v", got)
 	}
+	if got.peerClass != peerClassBootstrapOnly {
+		t.Fatalf("expected bootstrap_only class, got %+v", got)
+	}
 	if got.peerReady {
 		t.Fatalf("expected peerReady=false when no target virtual ip, got %+v", got)
 	}
-	if !strings.Contains(strings.Join(logs, "\n"), "warn:peer_waiting_virtual_ip:") {
-		t.Fatalf("expected peer_waiting_virtual_ip warning, logs=%v", logs)
+	if !strings.Contains(strings.Join(logs, "\n"), "warn:bootstrap_connected:") {
+		t.Fatalf("expected bootstrap_connected warning, logs=%v", logs)
+	}
+}
+
+func TestEvaluateCandidateConnectivityBusinessEndpointWaitingVirtualIP(t *testing.T) {
+	var logs []string
+	cfg := candidateCheckConfig{
+		maxChecks:   3,
+		window:      30 * time.Millisecond,
+		step:        5 * time.Millisecond,
+		probeTimout: 5 * time.Millisecond,
+	}
+	deps := sessionDeps{
+		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
+			return PeerReadiness{
+				Ready:          false,
+				NonSelfPresent: true,
+				PeerClass:      peerClassBusinessPeerWaitingIP,
+			}, nil
+		},
+		routeInterfaceForTarget: func(string) (string, error) { return "", nil },
+		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
+		shouldCheckRouteOwner:   func() bool { return true },
+		sleep:                   time.Sleep,
+	}
+
+	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
+		logs = append(logs, result+":"+reason+":"+detail)
+	})
+	if !got.nonSelfPresent {
+		t.Fatalf("expected nonSelfPresent=true, got %+v", got)
+	}
+	if got.peerClass != peerClassBusinessPeerWaitingIP {
+		t.Fatalf("expected business waiting class, got %+v", got)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "warn:business_endpoint_waiting:") {
+		t.Fatalf("expected business_endpoint_waiting warning, logs=%v", logs)
 	}
 }

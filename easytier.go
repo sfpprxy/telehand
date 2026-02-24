@@ -198,7 +198,17 @@ type PeerReadiness struct {
 	Ready          bool
 	TargetIP       string
 	NonSelfPresent bool
+	PeerClass      string
+	PeerID         string
+	PeerHostname   string
 }
+
+const (
+	peerClassNone                  = "none"
+	peerClassBootstrapOnly         = "bootstrap_only"
+	peerClassBusinessPeerWaitingIP = "business_peer_waiting_virtual_ip"
+	peerClassEndpointReady         = "endpoint_ready"
+)
 
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
@@ -364,24 +374,61 @@ func (et *EasyTier) QueryPeerReadiness() (PeerReadiness, error) {
 		return PeerReadiness{}, err
 	}
 	nonSelfPresent := false
+	bootstrapPeerID := ""
+	bootstrapPeerHost := ""
 	for _, p := range raw {
 		peerID := strings.TrimSpace(p.PeerID)
 		ip := stripCIDR(p.IPv4)
+		hostname := strings.TrimSpace(p.Hostname)
 		if peerID != "" && selfID != "" && peerID == selfID {
 			continue
 		}
-		hostname := strings.TrimSpace(p.Hostname)
 		if peerID != "" || hostname != "" {
 			if hostname == "" || !strings.EqualFold(hostname, strings.TrimSpace(node.Hostname)) {
 				nonSelfPresent = true
 			}
 		}
 		if ip == "" || ip == "0.0.0.0" || ip == selfIP {
+			if isBootstrapPeerHost(hostname) {
+				bootstrapPeerID = peerID
+				bootstrapPeerHost = hostname
+			}
 			continue
 		}
-		return PeerReadiness{Ready: true, TargetIP: ip, NonSelfPresent: true}, nil
+		return PeerReadiness{
+			Ready:          true,
+			TargetIP:       ip,
+			NonSelfPresent: true,
+			PeerClass:      peerClassEndpointReady,
+			PeerID:         peerID,
+			PeerHostname:   hostname,
+		}, nil
 	}
-	return PeerReadiness{Ready: false, NonSelfPresent: nonSelfPresent}, nil
+	if bootstrapPeerID != "" || bootstrapPeerHost != "" {
+		return PeerReadiness{
+			Ready:          false,
+			NonSelfPresent: true,
+			PeerClass:      peerClassBootstrapOnly,
+			PeerID:         bootstrapPeerID,
+			PeerHostname:   bootstrapPeerHost,
+		}, nil
+	}
+	if nonSelfPresent {
+		return PeerReadiness{
+			Ready:          false,
+			NonSelfPresent: true,
+			PeerClass:      peerClassBusinessPeerWaitingIP,
+		}, nil
+	}
+	return PeerReadiness{Ready: false, NonSelfPresent: false, PeerClass: peerClassNone}, nil
+}
+
+func isBootstrapPeerHost(hostname string) bool {
+	name := strings.TrimSpace(hostname)
+	if name == "" {
+		return false
+	}
+	return strings.HasPrefix(name, "PublicServer_")
 }
 
 func valueOrDash(v string) string {
