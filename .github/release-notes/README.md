@@ -14,7 +14,26 @@ The workflow fails if the file is missing or empty.
 
 ## Writing style
 
-- Summarize user-visible changes in plain language.
-- Focus on outcomes and behavior changes.
-- Avoid dumping raw commit logs.
-- Keep it concise (typically 4-10 bullets).
+Use exactly two sections in every release notes file:
+
+- `## Fixed`
+- `## Changed`
+
+Template:
+
+```md
+## Fixed
+
+- ...
+
+## Changed
+
+- ...
+```
+
+Guidelines:
+
+- `Fixed`: what was repaired, resolved, or corrected.
+- `Changed`: what behavior or workflow was intentionally changed.
+- Keep wording user-facing and concise.
+- Do not dump commit-by-commit details.

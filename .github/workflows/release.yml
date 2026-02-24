@@ -47,6 +47,12 @@ jobs:
           unzip -o -j et.zip "${{ matrix.et_cli }}" -d /tmp/et-cli
           cp /tmp/et-core/* ${{ matrix.et_core_dest }}
           cp /tmp/et-cli/* ${{ matrix.et_cli_dest }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            unzip -o -j et.zip "easytier-windows-x86_64/Packet.dll" -d /tmp/et-packet
+            unzip -o -j et.zip "easytier-windows-x86_64/wintun.dll" -d /tmp/et-wintun
+            cp /tmp/et-packet/* easytier-bin/Packet.dll
+            cp /tmp/et-wintun/* easytier-bin/wintun.dll
+          fi
           chmod +x ${{ matrix.et_core_dest }} ${{ matrix.et_cli_dest }}
 
       - name: Build
