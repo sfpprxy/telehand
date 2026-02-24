@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,7 +27,45 @@ type EasyTier struct {
 }
 
 func NewEasyTier(onLog func(string)) *EasyTier {
-	return &EasyTier{onLog: onLog, rpcPort: "18899"}
+	return &EasyTier{onLog: onLog, rpcPort: allocateRPCPort()}
+}
+
+func allocateRPCPort() string {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "18899"
+	}
+	defer ln.Close()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil || port == "" {
+		return "18899"
+	}
+	return port
+}
+
+func ensureWindowsRuntimeDLLs(dir string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	deps := []struct {
+		name string
+		data []byte
+	}{
+		{name: "Packet.dll", data: embeddedPacketDLL},
+		{name: "wintun.dll", data: embeddedWintunDLL},
+	}
+
+	for _, dep := range deps {
+		if len(dep.data) == 0 {
+			return fmt.Errorf("%s embedded payload is empty", dep.name)
+		}
+		dst := filepath.Join(dir, dep.name)
+		if err := os.WriteFile(dst, dep.data, 0644); err != nil {
+			return fmt.Errorf("write %s failed: %w", dep.name, err)
+		}
+	}
+	return nil
 }
 
 func (et *EasyTier) Start(cfg *Config) error {
@@ -49,6 +89,10 @@ func (et *EasyTier) Start(cfg *Config) error {
 
 	et.cliBin = filepath.Join(dir, cliName)
 	if err := os.WriteFile(et.cliBin, embeddedEasyTierCli, 0755); err != nil {
+		return err
+	}
+
+	if err := ensureWindowsRuntimeDLLs(dir); err != nil {
 		return err
 	}
 
@@ -76,6 +120,9 @@ func (et *EasyTier) Start(cfg *Config) error {
 	if err := et.cmd.Start(); err != nil {
 		return err
 	}
+	if et.onLog != nil {
+		et.onLog(fmt.Sprintf("[telehand] easytier rpc=%s", et.rpcPort))
+	}
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -100,32 +147,40 @@ type nodeInfo struct {
 func (et *EasyTier) WaitForIP(timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		ip := et.queryIP()
+		ip, err := et.queryIP()
 		if ip != "" {
 			et.VirtIP = ip
 			return ip, nil
+		}
+		if err != nil && et.onLog != nil {
+			et.onLog(fmt.Sprintf("[telehand] queryIP failed: %v", err))
 		}
 		time.Sleep(2 * time.Second)
 	}
 	return "", fmt.Errorf("timeout waiting for EasyTier virtual IP")
 }
 
-func (et *EasyTier) queryIP() string {
-	cmd := exec.Command(et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "node", "info")
-	out, err := cmd.Output()
+func (et *EasyTier) queryIP() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "node", "info")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return ""
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("easytier-cli timed out")
+		}
+		return "", fmt.Errorf("easytier-cli error: %v, output=%s", err, strings.TrimSpace(string(out)))
 	}
 	var info nodeInfo
 	if err := json.Unmarshal(out, &info); err != nil {
-		return ""
+		return "", fmt.Errorf("invalid node info json: %v", err)
 	}
 	// ipv4_addr is like "10.126.126.2/24", strip the mask
 	ip := strings.Split(info.IPv4Addr, "/")[0]
 	if ip != "" && ip != "0.0.0.0" {
-		return ip
+		return ip, nil
 	}
-	return ""
+	return "", nil
 }
 
 func (et *EasyTier) Logs() []string {

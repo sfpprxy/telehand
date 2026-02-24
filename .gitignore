@@ -5,3 +5,5 @@ easytier-bin/easytier-core-darwin
 easytier-bin/easytier-core.exe
 easytier-bin/easytier-cli-darwin
 easytier-bin/easytier-cli.exe
+easytier-bin/Packet.dll
+easytier-bin/wintun.dll

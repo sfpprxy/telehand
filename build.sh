@@ -1,22 +1,9 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Check easytier binaries exist
-if [ ! -f easytier-bin/easytier-core.exe ]; then
-  echo "ERROR: easytier-bin/easytier-core.exe not found"
-  echo "Download Windows amd64 EasyTier from https://github.com/EasyTier/EasyTier/releases"
-  echo "and place easytier-core.exe in easytier-bin/"
-  exit 1
-fi
-
-if [ ! -f easytier-bin/easytier-core-darwin ]; then
-  echo "ERROR: easytier-bin/easytier-core-darwin not found"
-  echo "Download macOS arm64 EasyTier from https://github.com/EasyTier/EasyTier/releases"
-  echo "and place the binary as easytier-bin/easytier-core-darwin"
-  exit 1
-fi
+./scripts/fetch-easytier.sh
 
 mkdir -p dist
 

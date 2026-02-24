@@ -9,3 +9,6 @@ var embeddedEasyTier []byte
 
 //go:embed easytier-bin/easytier-cli-darwin
 var embeddedEasyTierCli []byte
+
+var embeddedPacketDLL []byte
+var embeddedWintunDLL []byte
