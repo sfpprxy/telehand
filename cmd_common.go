@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	DefaultPeers = "tcp://39.108.52.138:11010"
+	DefaultPeers = "tcp://43.139.65.49:11010"
 
 	ExitCodeOK      = 0
 	ExitCodeParam   = 2

@@ -10,10 +10,9 @@ import (
 func TestEvaluateCandidateConnectivityRouteMismatchButReachable(t *testing.T) {
 	var logs []string
 	cfg := candidateCheckConfig{
-		maxChecks:   3,
-		window:      50 * time.Millisecond,
-		step:        time.Millisecond,
-		probeTimout: 5 * time.Millisecond,
+		maxChecks:    3,
+		pollInterval: time.Millisecond,
+		probeTimout:  5 * time.Millisecond,
 	}
 	deps := sessionDeps{
 		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
@@ -22,7 +21,6 @@ func TestEvaluateCandidateConnectivityRouteMismatchButReachable(t *testing.T) {
 		routeInterfaceForTarget: func(string) (string, error) { return "en0", nil },
 		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
 		shouldCheckRouteOwner:   func() bool { return true },
-		sleep:                   func(time.Duration) {},
 	}
 
 	got := evaluateCandidateConnectivity(nil, "utun9", 8080, cfg, deps, func(result, reason, detail string) {
@@ -51,10 +49,9 @@ func TestEvaluateCandidateConnectivityRouteMismatchButReachable(t *testing.T) {
 func TestEvaluateCandidateConnectivityExplicitConflictEvidence(t *testing.T) {
 	var calls int
 	cfg := candidateCheckConfig{
-		maxChecks:   3,
-		window:      60 * time.Millisecond,
-		step:        5 * time.Millisecond,
-		probeTimout: 5 * time.Millisecond,
+		maxChecks:    3,
+		pollInterval: 5 * time.Millisecond,
+		probeTimout:  5 * time.Millisecond,
 	}
 	deps := sessionDeps{
 		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
@@ -67,7 +64,6 @@ func TestEvaluateCandidateConnectivityExplicitConflictEvidence(t *testing.T) {
 		routeInterfaceForTarget: func(string) (string, error) { return "en0", nil },
 		probePeerVirtualIP:      func(string, int, time.Duration) error { return errors.New("dial timeout") },
 		shouldCheckRouteOwner:   func() bool { return true },
-		sleep:                   time.Sleep,
 	}
 
 	got := evaluateCandidateConnectivity(nil, "utun8", 8080, cfg, deps, func(string, string, string) {})
@@ -75,8 +71,8 @@ func TestEvaluateCandidateConnectivityExplicitConflictEvidence(t *testing.T) {
 	if got.routeMismatchDetail == "" {
 		t.Fatalf("expected route mismatch detail, got %+v", got)
 	}
-	if got.peerQueryFailures < cfg.maxChecks {
-		t.Fatalf("expected peer query failures >= %d, got %d", cfg.maxChecks, got.peerQueryFailures)
+	if got.peerQueryFailures < cfg.maxChecks-1 {
+		t.Fatalf("expected peer query failures >= %d, got %d", cfg.maxChecks-1, got.peerQueryFailures)
 	}
 	if got.probeSuccess {
 		t.Fatalf("expected no probe success, got %+v", got)
@@ -86,10 +82,9 @@ func TestEvaluateCandidateConnectivityExplicitConflictEvidence(t *testing.T) {
 func TestEvaluateCandidateConnectivityRetryExhausted(t *testing.T) {
 	var logs []string
 	cfg := candidateCheckConfig{
-		maxChecks:   3,
-		window:      40 * time.Millisecond,
-		step:        5 * time.Millisecond,
-		probeTimout: 5 * time.Millisecond,
+		maxChecks:    3,
+		pollInterval: 5 * time.Millisecond,
+		probeTimout:  5 * time.Millisecond,
 	}
 	deps := sessionDeps{
 		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
@@ -98,7 +93,6 @@ func TestEvaluateCandidateConnectivityRetryExhausted(t *testing.T) {
 		routeInterfaceForTarget: func(string) (string, error) { return "", nil },
 		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
 		shouldCheckRouteOwner:   func() bool { return true },
-		sleep:                   time.Sleep,
 	}
 
 	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
@@ -126,10 +120,9 @@ func TestEvaluateCandidateConnectivityRetryExhausted(t *testing.T) {
 func TestEvaluateCandidateConnectivityNonSelfPeerWithoutVirtualIP(t *testing.T) {
 	var logs []string
 	cfg := candidateCheckConfig{
-		maxChecks:   3,
-		window:      30 * time.Millisecond,
-		step:        5 * time.Millisecond,
-		probeTimout: 5 * time.Millisecond,
+		maxChecks:    3,
+		pollInterval: 5 * time.Millisecond,
+		probeTimout:  5 * time.Millisecond,
 	}
 	deps := sessionDeps{
 		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
@@ -144,7 +137,6 @@ func TestEvaluateCandidateConnectivityNonSelfPeerWithoutVirtualIP(t *testing.T) 
 		routeInterfaceForTarget: func(string) (string, error) { return "", nil },
 		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
 		shouldCheckRouteOwner:   func() bool { return true },
-		sleep:                   time.Sleep,
 	}
 
 	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
@@ -167,10 +159,9 @@ func TestEvaluateCandidateConnectivityNonSelfPeerWithoutVirtualIP(t *testing.T) 
 func TestEvaluateCandidateConnectivityBusinessEndpointWaitingVirtualIP(t *testing.T) {
 	var logs []string
 	cfg := candidateCheckConfig{
-		maxChecks:   3,
-		window:      30 * time.Millisecond,
-		step:        5 * time.Millisecond,
-		probeTimout: 5 * time.Millisecond,
+		maxChecks:    3,
+		pollInterval: 5 * time.Millisecond,
+		probeTimout:  5 * time.Millisecond,
 	}
 	deps := sessionDeps{
 		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
@@ -183,7 +174,6 @@ func TestEvaluateCandidateConnectivityBusinessEndpointWaitingVirtualIP(t *testin
 		routeInterfaceForTarget: func(string) (string, error) { return "", nil },
 		probePeerVirtualIP:      func(string, int, time.Duration) error { return nil },
 		shouldCheckRouteOwner:   func() bool { return true },
-		sleep:                   time.Sleep,
 	}
 
 	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {

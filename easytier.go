@@ -201,6 +201,7 @@ type PeerReadiness struct {
 	PeerClass      string
 	PeerID         string
 	PeerHostname   string
+	PeerIDs        []string
 }
 
 const (
@@ -262,7 +263,7 @@ func (et *EasyTier) queryIP() (string, error) {
 }
 
 func (et *EasyTier) queryNodeInfo() (*nodeInfo, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultEasyTierCLIQueryTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "node", "info")
 	out, err := cmd.CombinedOutput()
@@ -344,7 +345,7 @@ func (et *EasyTier) QueryPeerInfo(role string) (PeerInfoSnapshot, error) {
 }
 
 func (et *EasyTier) queryRawPeerList() ([]rawPeerInfo, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultEasyTierCLIQueryTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, et.cliBin, "-p", fmt.Sprintf("127.0.0.1:%s", et.rpcPort), "-o", "json", "peer", "list")
 	out, err := cmd.CombinedOutput()
@@ -366,22 +367,32 @@ func (et *EasyTier) QueryPeerReadiness() (PeerReadiness, error) {
 	if err != nil {
 		return PeerReadiness{}, err
 	}
-	selfID := peerIDToString(node.PeerID)
-	selfIP := stripCIDR(node.IPv4Addr)
-
 	raw, err := et.queryRawPeerList()
 	if err != nil {
 		return PeerReadiness{}, err
 	}
+	return classifyPeerReadiness(node, raw), nil
+}
+
+func classifyPeerReadiness(node *nodeInfo, raw []rawPeerInfo) PeerReadiness {
+	if node == nil {
+		return PeerReadiness{Ready: false, NonSelfPresent: false, PeerClass: peerClassNone}
+	}
+	selfID := peerIDToString(node.PeerID)
+	selfIP := stripCIDR(node.IPv4Addr)
 	nonSelfPresent := false
 	bootstrapPeerID := ""
 	bootstrapPeerHost := ""
+	peerIDs := make([]string, 0, len(raw))
 	for _, p := range raw {
 		peerID := strings.TrimSpace(p.PeerID)
 		ip := stripCIDR(p.IPv4)
 		hostname := strings.TrimSpace(p.Hostname)
 		if peerID != "" && selfID != "" && peerID == selfID {
 			continue
+		}
+		if peerID != "" {
+			peerIDs = append(peerIDs, peerID)
 		}
 		if peerID != "" || hostname != "" {
 			if hostname == "" || !strings.EqualFold(hostname, strings.TrimSpace(node.Hostname)) {
@@ -402,7 +413,8 @@ func (et *EasyTier) QueryPeerReadiness() (PeerReadiness, error) {
 			PeerClass:      peerClassEndpointReady,
 			PeerID:         peerID,
 			PeerHostname:   hostname,
-		}, nil
+			PeerIDs:        peerIDs,
+		}
 	}
 	if bootstrapPeerID != "" || bootstrapPeerHost != "" {
 		return PeerReadiness{
@@ -411,16 +423,42 @@ func (et *EasyTier) QueryPeerReadiness() (PeerReadiness, error) {
 			PeerClass:      peerClassBootstrapOnly,
 			PeerID:         bootstrapPeerID,
 			PeerHostname:   bootstrapPeerHost,
-		}, nil
+			PeerIDs:        peerIDs,
+		}
 	}
 	if nonSelfPresent {
 		return PeerReadiness{
 			Ready:          false,
 			NonSelfPresent: true,
 			PeerClass:      peerClassBusinessPeerWaitingIP,
-		}, nil
+			PeerIDs:        peerIDs,
+		}
 	}
-	return PeerReadiness{Ready: false, NonSelfPresent: false, PeerClass: peerClassNone}, nil
+	return PeerReadiness{Ready: false, NonSelfPresent: false, PeerClass: peerClassNone, PeerIDs: peerIDs}
+}
+
+type EasyTierSnapshot struct {
+	At        time.Time
+	Node      *nodeInfo
+	Peers     []rawPeerInfo
+	Readiness PeerReadiness
+}
+
+func (et *EasyTier) QuerySnapshot() (EasyTierSnapshot, error) {
+	node, err := et.queryNodeInfo()
+	if err != nil {
+		return EasyTierSnapshot{}, err
+	}
+	peers, err := et.queryRawPeerList()
+	if err != nil {
+		return EasyTierSnapshot{}, err
+	}
+	return EasyTierSnapshot{
+		At:        time.Now(),
+		Node:      node,
+		Peers:     peers,
+		Readiness: classifyPeerReadiness(node, peers),
+	}, nil
 }
 
 func isBootstrapPeerHost(hostname string) bool {

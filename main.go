@@ -10,6 +10,8 @@ func main() {
 }
 
 func runMain(args []string) int {
+	fmt.Printf("Telehand v%s\n", telehandVersion)
+
 	if len(args) == 0 {
 		// default: serve mode (for double-click)
 		return runServe(nil)

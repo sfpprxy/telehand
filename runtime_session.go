@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -23,23 +24,23 @@ type sessionOptions struct {
 }
 
 type sessionDeps struct {
-	queryPeerReadiness      func(*EasyTier) (PeerReadiness, error)
-	routeInterfaceForTarget func(string) (string, error)
-	probePeerVirtualIP      func(string, int, time.Duration) error
-	shouldCheckRouteOwner   func() bool
-	sleep                   func(time.Duration)
+	queryPeerReadiness       func(*EasyTier) (PeerReadiness, error)
+	querySnapshot            func(*EasyTier) (EasyTierSnapshot, error)
+	routeInterfaceForTarget  func(string) (string, error)
+	addHostRouteForTarget    func(string, string) error
+	removeHostRouteForTarget func(string, string) error
+	probePeerVirtualIP       func(string, int, time.Duration) error
+	shouldCheckRouteOwner    func() bool
 }
 
 type candidateCheckConfig struct {
-	maxChecks   int
-	window      time.Duration
-	step        time.Duration
-	probeTimout time.Duration
+	maxChecks    int
+	pollInterval time.Duration
+	probeTimout  time.Duration
+	returnOnBootstrap bool
 }
 
 type runningGuardConfig struct {
-	protectionWindow  time.Duration
-	checkInterval     time.Duration
 	consecutiveFailed int
 	probeTimeout      time.Duration
 }
@@ -48,32 +49,36 @@ type candidateCheckResult struct {
 	peerReady           bool
 	nonSelfPresent      bool
 	peerClass           string
+	targetIP            string
 	probeSuccess        bool
 	peerQueryFailures   int
 	routeMismatchDetail string
 	lastProbeErr        error
+	hostRouteInstalled  bool
 }
 
 var (
 	defaultSessionDeps = sessionDeps{
-		queryPeerReadiness:      func(et *EasyTier) (PeerReadiness, error) { return et.QueryPeerReadiness() },
-		routeInterfaceForTarget: routeInterfaceForTarget,
-		probePeerVirtualIP:      probePeerVirtualIP,
-		shouldCheckRouteOwner:   shouldCheckRouteOwnership,
-		sleep:                   time.Sleep,
+		queryPeerReadiness:       func(et *EasyTier) (PeerReadiness, error) { return et.QueryPeerReadiness() },
+		querySnapshot:            func(et *EasyTier) (EasyTierSnapshot, error) { return et.QuerySnapshot() },
+		routeInterfaceForTarget:  routeInterfaceForTarget,
+		addHostRouteForTarget:    addHostRouteForTarget,
+		removeHostRouteForTarget: removeHostRouteForTarget,
+		probePeerVirtualIP:       probePeerVirtualIP,
+		shouldCheckRouteOwner:    shouldCheckRouteOwnership,
 	}
 	defaultCandidateCheckConfig = candidateCheckConfig{
-		maxChecks:   3,
-		window:      5 * time.Second,
-		step:        3 * time.Second,
-		probeTimout: 800 * time.Millisecond,
+		maxChecks:    3,
+		pollInterval: defaultStateSnapshotPollInterval,
+		probeTimout:  defaultPeerProbeTimeout,
 	}
 	defaultRunningGuardConfig = runningGuardConfig{
-		protectionWindow:  5 * time.Second,
-		checkInterval:     2 * time.Second,
 		consecutiveFailed: 3,
-		probeTimeout:      800 * time.Millisecond,
+		probeTimeout:      defaultPeerProbeTimeout,
 	}
+	candidateLogLimiterMu   sync.Mutex
+	candidateLogLimiterSeen = map[string]time.Time{}
+	candidateLogLimiterTTL  = 10 * time.Second
 )
 
 func runSession(opts sessionOptions) int {
@@ -206,9 +211,7 @@ func runSession(opts sessionOptions) int {
 	if precheckErr != nil {
 		msg := fmt.Sprintf("[telehand] startup precheck warning: collect local networks failed: %v", precheckErr)
 		gui.AddDebugLog(msg)
-		if cliOnly {
-			fmt.Println(msg)
-		}
+		fmt.Println(msg)
 	}
 	candidates := chooseCandidates(networkHash, role, usedNets)
 	if len(candidates) == 0 {
@@ -222,30 +225,35 @@ func runSession(opts sessionOptions) int {
 	}
 
 	var (
-		activeET *EasyTier
-		virtIP   string
-		baseline SessionBaseline
-		lastErr  error
-		lastCode string
+		activeET              *EasyTier
+		virtIP                string
+		baseline              SessionBaseline
+		lastErr               error
+		lastCode              string
+		activeHostRouteTarget string
 	)
 	deps := defaultSessionDeps
 	checkCfg := defaultCandidateCheckConfig
+	if strings.EqualFold(role, "client") {
+		checkCfg.returnOnBootstrap = true
+	}
 
 connectLoop:
 	for attempt, candidate := range candidates {
 		msg := fmt.Sprintf("[telehand] startup candidate %d/%d subnet=%s local=%s", attempt+1, len(candidates), candidate.SubnetCIDR, candidate.LocalCIDR)
 		gui.AddDebugLog(msg)
-		if cliOnly {
-			fmt.Println(msg)
-		}
+		fmt.Println(msg)
 
-		activeET = NewEasyTier(func(line string) {
-			sanitized := sanitizeSensitiveLog(line, cfg.NetworkSecret)
-			gui.AddDebugLog(sanitized)
-			if cliOnly {
+			activeET = NewEasyTier(func(line string) {
+				sanitized := sanitizeSensitiveLog(line, cfg.NetworkSecret)
+				gui.AddDebugLog(sanitized)
 				fmt.Println(sanitized)
-			}
-		})
+				if strings.Contains(sanitized, "peer connection removed.") {
+					extra := "[telehand] event_peer_connection_removed source=easytier-core detail=core reported peer transport removed; waiting snapshot/event reconciliation"
+					gui.AddDebugLog(extra)
+					fmt.Println(extra)
+				}
+			})
 		runtimeMu.Lock()
 		runtimeET = activeET
 		runtimeMu.Unlock()
@@ -289,14 +297,33 @@ connectLoop:
 		checkResult := evaluateCandidateConnectivity(activeET, tunDevice, apiPort, checkCfg, deps, func(result, reason, detail string) {
 			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, result, reason, detail)
 		})
+		logCandidateDecision(
+			gui,
+			cliOnly,
+			attempt+1,
+			len(candidates),
+			candidate.SubnetCIDR,
+			"warn",
+			"candidate_eval",
+			fmt.Sprintf(
+				"peer_ready=%t probe_success=%t non_self_present=%t peer_class=%s peer_query_failures=%d target=%s",
+				checkResult.peerReady,
+				checkResult.probeSuccess,
+				checkResult.nonSelfPresent,
+				checkResult.peerClass,
+				checkResult.peerQueryFailures,
+				strings.TrimSpace(checkResult.targetIP),
+			),
+		)
 
 		if checkResult.peerReady && checkResult.probeSuccess {
+			activeHostRouteTarget = checkResult.targetIP
 			lastErr = nil
 			lastCode = ""
 			break connectLoop
 		}
-		if strings.EqualFold(role, "client") && checkResult.peerClass == peerClassBootstrapOnly && checkResult.peerQueryFailures == 0 {
-			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, "pass", "bootstrap_connected", "bootstrap peer connected; allow running for first join")
+		if strings.EqualFold(role, "client") && checkResult.nonSelfPresent && !checkResult.peerReady && checkResult.peerQueryFailures == 0 {
+			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, "pass", "peer_waiting_virtual_ip", "non-self peer present but virtual ip not ready; allow running for first join")
 			lastErr = nil
 			lastCode = ""
 			break connectLoop
@@ -306,6 +333,9 @@ connectLoop:
 			lastErr = fmt.Errorf("route conflict evidence: %s, peer_query_failed=%d", checkResult.routeMismatchDetail, checkResult.peerQueryFailures)
 			lastCode = ErrorCodeRouteConflictDetected
 			logCandidateDecision(gui, cliOnly, attempt+1, len(candidates), candidate.SubnetCIDR, "conflict", "route_conflict_detected", lastErr.Error())
+			if deps.removeHostRouteForTarget != nil && checkResult.hostRouteInstalled && checkResult.targetIP != "" {
+				_ = deps.removeHostRouteForTarget(checkResult.targetIP, tunDevice)
+			}
 			activeET.Stop()
 			continue
 		}
@@ -314,9 +344,12 @@ connectLoop:
 		if checkResult.peerReady && checkResult.lastProbeErr != nil {
 			lastErr = fmt.Errorf("peer ready but connectivity probe failed: %v", checkResult.lastProbeErr)
 		} else if !checkResult.peerReady {
-			lastErr = fmt.Errorf("peer not ready within %s", checkCfg.window)
+			lastErr = fmt.Errorf("peer not ready")
 		} else {
 			lastErr = fmt.Errorf("peer probe failed without explicit conflict")
+		}
+		if deps.removeHostRouteForTarget != nil && checkResult.hostRouteInstalled && checkResult.targetIP != "" {
+			_ = deps.removeHostRouteForTarget(checkResult.targetIP, tunDevice)
 		}
 		activeET.Stop()
 		continue
@@ -353,7 +386,7 @@ connectLoop:
 	gui.SetState(state)
 	fmt.Printf("State: connecting -> running\n")
 	fmt.Printf("API server reachable at http://%s:%d\n", virtIP, apiPort)
-	fmt.Printf("State guard: protection_window=%s, threshold=%d consecutive failures\n", defaultRunningGuardConfig.protectionWindow, defaultRunningGuardConfig.consecutiveFailed)
+	fmt.Printf("State guard: threshold=%d consecutive failures\n", defaultRunningGuardConfig.consecutiveFailed)
 
 	stopPeerPrint := make(chan struct{}, 1)
 	go printPeerInfoLoop(stopPeerPrint, func() (PeerInfoSnapshot, error) {
@@ -387,6 +420,9 @@ connectLoop:
 	stopPeerPrint <- struct{}{}
 	api.Stop()
 	if activeET != nil {
+		if deps.removeHostRouteForTarget != nil && activeHostRouteTarget != "" {
+			_ = deps.removeHostRouteForTarget(activeHostRouteTarget, baseline.TunDevice)
+		}
 		activeET.Stop()
 	}
 	gui.Stop()
@@ -449,11 +485,48 @@ func shouldCheckRouteOwnership() bool {
 }
 
 func logCandidateDecision(gui *GUIServer, cliOnly bool, attempt, total int, subnet, result, reason, detail string) {
+	_ = cliOnly
+	bypassLimiter := strings.HasPrefix(strings.TrimSpace(reason), "event_")
+	key := strings.TrimSpace(subnet) + "|" + strings.TrimSpace(result) + "|" + strings.TrimSpace(reason) + "|" + strings.TrimSpace(detail)
+	now := time.Now()
+	if !bypassLimiter {
+		candidateLogLimiterMu.Lock()
+		last := candidateLogLimiterSeen[key]
+		if !last.IsZero() && now.Sub(last) < candidateLogLimiterTTL {
+			candidateLogLimiterMu.Unlock()
+			return
+		}
+		candidateLogLimiterSeen[key] = now
+		candidateLogLimiterMu.Unlock()
+	}
+
 	line := fmt.Sprintf("[telehand] candidate=%d/%d subnet=%s result=%s reason=%s detail=%s", attempt, total, subnet, result, reason, detail)
 	gui.AddDebugLog(line)
-	if cliOnly {
-		fmt.Println(line)
+	fmt.Println(line)
+}
+
+func formatReadinessContext(readiness PeerReadiness) string {
+	class := strings.TrimSpace(readiness.PeerClass)
+	if class == "" {
+		class = peerClassNone
 	}
+	peerIDs := make([]string, 0, len(readiness.PeerIDs))
+	for _, id := range readiness.PeerIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			peerIDs = append(peerIDs, id)
+		}
+	}
+	return fmt.Sprintf(
+		"ready=%t class=%s non_self=%t peer_id=%s peer_host=%s target_ip=%s peer_ids=%s",
+		readiness.Ready,
+		class,
+		readiness.NonSelfPresent,
+		valueOrDash(strings.TrimSpace(readiness.PeerID)),
+		valueOrDash(strings.TrimSpace(readiness.PeerHostname)),
+		valueOrDash(strings.TrimSpace(readiness.TargetIP)),
+		valueOrDash(strings.Join(peerIDs, ",")),
+	)
 }
 
 func evaluateCandidateConnectivity(
@@ -465,44 +538,110 @@ func evaluateCandidateConnectivity(
 	logFn func(result, reason, detail string),
 ) candidateCheckResult {
 	result := candidateCheckResult{}
-	deadline := time.Now().Add(cfg.window)
-
-	for check := 1; time.Now().Before(deadline); check++ {
-		if check > 64 {
-			break
+	if et == nil {
+		checks := cfg.maxChecks
+		if checks <= 0 {
+			checks = 1
 		}
-		readiness, readyErr := deps.queryPeerReadiness(et)
-		if readyErr != nil {
-			result.peerQueryFailures++
-			logFn("warn", "peer_query_failed", readyErr.Error())
-			if cfg.step > 0 {
-				deps.sleep(cfg.step)
+		for i := 0; i < checks; i++ {
+			readiness, readyErr := deps.queryPeerReadiness(et)
+			if readyErr != nil {
+				result.peerQueryFailures++
+				logFn("warn", "peer_query_failed", readyErr.Error())
+				time.Sleep(cfg.pollInterval)
+				continue
 			}
-			continue
+			result.peerReady = readiness.Ready
+			result.nonSelfPresent = result.nonSelfPresent || readiness.NonSelfPresent
+			result.targetIP = strings.TrimSpace(readiness.TargetIP)
+			if readiness.PeerClass != "" && readiness.PeerClass != peerClassNone {
+				result.peerClass = readiness.PeerClass
+			}
+				if !readiness.Ready {
+					context := formatReadinessContext(readiness)
+					if readiness.PeerClass == peerClassBootstrapOnly {
+						logFn("warn", "bootstrap_connected", "bootstrap peer connected, business endpoint not ready; "+context)
+						if cfg.returnOnBootstrap && readiness.NonSelfPresent {
+							return result
+						}
+					} else if readiness.PeerClass == peerClassBusinessPeerWaitingIP || readiness.NonSelfPresent {
+						logFn("warn", "business_endpoint_waiting", "peer connected but virtual ip not ready; "+context)
+						if cfg.returnOnBootstrap && readiness.NonSelfPresent {
+							return result
+						}
+					} else {
+						logFn("warn", "peer_not_ready", "peer list empty; "+context)
+					}
+				time.Sleep(cfg.pollInterval)
+				continue
+			}
+			targetIP := result.targetIP
+			if deps.shouldCheckRouteOwner() && targetIP != "" {
+				routeIface, routeErr := deps.routeInterfaceForTarget(targetIP)
+				if routeErr != nil {
+					logFn("warn", "route_check_failed", routeErr.Error())
+				} else if !strings.EqualFold(strings.TrimSpace(routeIface), strings.TrimSpace(tunDevice)) {
+					result.routeMismatchDetail = fmt.Sprintf("target=%s route_if=%s tun_if=%s", targetIP, routeIface, tunDevice)
+					logFn("warn", "route_mismatch", result.routeMismatchDetail)
+				}
+			}
+			if targetIP == "" {
+				result.lastProbeErr = fmt.Errorf("target peer virtual ip is empty")
+				logFn("warn", "probe_timeout", result.lastProbeErr.Error())
+				time.Sleep(cfg.pollInterval)
+				continue
+			}
+			if probeErr := deps.probePeerVirtualIP(targetIP, apiPort, cfg.probeTimout); probeErr == nil {
+				result.probeSuccess = true
+				logFn("pass", "peer_ready", fmt.Sprintf("target=%s", targetIP))
+				return result
+			} else {
+				result.lastProbeErr = probeErr
+				logFn("warn", "probe_timeout", probeErr.Error())
+			}
+			time.Sleep(cfg.pollInterval)
 		}
+		return result
+	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	poller := NewEasyTierStatePoller(et, cfg.pollInterval)
+	snapshots, events := poller.Start(ctx)
+
+	applySnapshot := func(snap EasyTierSnapshot) bool {
+		readiness := snap.Readiness
 		result.peerReady = readiness.Ready
 		result.nonSelfPresent = result.nonSelfPresent || readiness.NonSelfPresent
+		result.targetIP = strings.TrimSpace(readiness.TargetIP)
 		if readiness.PeerClass != "" && readiness.PeerClass != peerClassNone {
 			result.peerClass = readiness.PeerClass
 		}
 		if !result.peerReady {
+			context := formatReadinessContext(readiness)
 			if readiness.PeerClass == peerClassBootstrapOnly {
-				logFn("warn", "bootstrap_connected", fmt.Sprintf("bootstrap peer connected id=%s hostname=%s, business endpoint not ready", readiness.PeerID, readiness.PeerHostname))
+				logFn("warn", "bootstrap_connected", "bootstrap peer connected, business endpoint not ready; "+context)
+				if cfg.returnOnBootstrap && readiness.NonSelfPresent {
+					return true
+				}
 			} else if readiness.PeerClass == peerClassBusinessPeerWaitingIP {
-				logFn("warn", "business_endpoint_waiting", "peer connected but virtual ip not ready")
+				logFn("warn", "business_endpoint_waiting", "peer connected but virtual ip not ready; "+context)
+				if cfg.returnOnBootstrap && readiness.NonSelfPresent {
+					return true
+				}
 			} else if readiness.NonSelfPresent {
-				logFn("warn", "business_endpoint_waiting", "non-self peer present but virtual ip not ready")
+				logFn("warn", "business_endpoint_waiting", "non-self peer present but virtual ip not ready; "+context)
+				if cfg.returnOnBootstrap {
+					return true
+				}
 			} else {
-				logFn("warn", "peer_not_ready", "peer list empty")
+				logFn("warn", "peer_not_ready", "peer list empty; "+context)
 			}
-			if cfg.step > 0 {
-				deps.sleep(cfg.step)
-			}
-			continue
+			return false
 		}
 
-		targetIP := strings.TrimSpace(readiness.TargetIP)
+		targetIP := result.targetIP
 		if deps.shouldCheckRouteOwner() && targetIP != "" {
 			routeIface, routeErr := deps.routeInterfaceForTarget(targetIP)
 			if routeErr != nil {
@@ -516,25 +655,75 @@ func evaluateCandidateConnectivity(
 		if targetIP == "" {
 			result.lastProbeErr = fmt.Errorf("target peer virtual ip is empty")
 			logFn("warn", "probe_timeout", result.lastProbeErr.Error())
-			if cfg.step > 0 {
-				deps.sleep(cfg.step)
+			return false
+		}
+
+		if !result.hostRouteInstalled {
+			if deps.addHostRouteForTarget == nil {
+				// Route pinning disabled in tests or custom dependency wiring.
+			} else if err := deps.addHostRouteForTarget(targetIP, tunDevice); err != nil {
+				logFn("warn", "route_host_add_failed", err.Error())
+			} else {
+				result.hostRouteInstalled = true
+				logFn("pass", "route_host_bound", fmt.Sprintf("target=%s tun_if=%s", targetIP, tunDevice))
 			}
-			continue
 		}
 
 		if probeErr := deps.probePeerVirtualIP(targetIP, apiPort, cfg.probeTimout); probeErr == nil {
 			result.probeSuccess = true
 			logFn("pass", "peer_ready", fmt.Sprintf("target=%s", targetIP))
-			break
+			return true
 		} else {
 			result.lastProbeErr = probeErr
 			logFn("warn", "probe_timeout", probeErr.Error())
-		}
-		if cfg.step > 0 {
-			deps.sleep(cfg.step)
+			return false
 		}
 	}
-	return result
+
+	for {
+		select {
+		case <-ctx.Done():
+			return result
+		case evt, ok := <-events:
+			if !ok {
+				return result
+			}
+			if evt.Type == EasyTierEventProcessExit {
+				result.lastProbeErr = fmt.Errorf("easytier process exited before candidate became ready")
+				logFn("warn", "event_process_exit", result.lastProbeErr.Error())
+				return result
+			}
+			if evt.Type == EasyTierEventPeerAdded {
+				result.nonSelfPresent = true
+				if result.peerClass == "" || result.peerClass == peerClassNone {
+					if evt.PeerClass != "" && evt.PeerClass != peerClassNone {
+						result.peerClass = evt.PeerClass
+					} else {
+						result.peerClass = peerClassBusinessPeerWaitingIP
+					}
+				}
+				logFn("warn", "event_peer_added", fmt.Sprintf("source=diff-engine peer_id=%s peer_class=%s", valueOrDash(evt.PeerID), valueOrDash(evt.PeerClass)))
+				if cfg.returnOnBootstrap {
+					logFn("warn", "business_endpoint_waiting", "non-self peer observed via event; virtual ip not ready")
+					return result
+				}
+			}
+			if evt.Type == EasyTierEventPeerRemoved {
+				logFn("warn", "event_peer_removed", fmt.Sprintf("source=diff-engine peer_id=%s peer_class=%s", valueOrDash(evt.PeerID), valueOrDash(evt.PeerClass)))
+			}
+			if evt.Type == EasyTierEventSnapshotError && evt.Err != nil {
+				result.peerQueryFailures++
+				logFn("warn", "event_snapshot_error", evt.Err.Error())
+			}
+		case snap, ok := <-snapshots:
+			if !ok {
+				return result
+			}
+			if applySnapshot(snap) {
+				return result
+			}
+		}
+	}
 }
 
 func runRunningStateGuard(
@@ -548,49 +737,49 @@ func runRunningStateGuard(
 	stop <-chan struct{},
 	sessionStop chan<- struct{},
 ) {
-	startedAt := time.Now()
 	failures := 0
-	ticker := time.NewTicker(cfg.checkInterval)
-	defer ticker.Stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-		}
+	poller := NewEasyTierStatePoller(et, defaultStateSnapshotPollInterval)
+	snapshots, events := poller.Start(ctx)
 
-		readiness, err := deps.queryPeerReadiness(et)
+	activeHostRouteTarget := ""
+	evaluate := func(readiness PeerReadiness) bool {
 		failed := false
 		reason := ""
 		detail := ""
-		targetIP := ""
+		targetIP := strings.TrimSpace(readiness.TargetIP)
 
-		if err != nil {
-			failed = true
-			reason = "peer_query_failed"
-			detail = err.Error()
-		} else if !readiness.Ready {
+		if !readiness.Ready {
 			if readiness.PeerClass == peerClassBootstrapOnly {
 				failures = 0
 				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "bootstrap_connected", fmt.Sprintf("bootstrap peer connected id=%s hostname=%s, business endpoint not ready", readiness.PeerID, readiness.PeerHostname))
-				continue
+				return false
 			}
-			if readiness.PeerClass == peerClassBusinessPeerWaitingIP {
+			if readiness.PeerClass == peerClassBusinessPeerWaitingIP || readiness.NonSelfPresent {
 				failures = 0
 				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "business_endpoint_waiting", "peer connected but virtual ip not ready")
-				continue
-			}
-			if readiness.NonSelfPresent {
-				failures = 0
-				logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "business_endpoint_waiting", "non-self peer present but virtual ip not ready")
-				continue
+				return false
 			}
 			failed = true
 			reason = "peer_query_failed"
 			detail = "peer list empty"
 		} else {
-			targetIP = strings.TrimSpace(readiness.TargetIP)
+			if targetIP != "" && targetIP != activeHostRouteTarget {
+				if deps.removeHostRouteForTarget != nil && activeHostRouteTarget != "" {
+					_ = deps.removeHostRouteForTarget(activeHostRouteTarget, tunDevice)
+					activeHostRouteTarget = ""
+				}
+				if deps.addHostRouteForTarget == nil {
+					// noop
+				} else if err := deps.addHostRouteForTarget(targetIP, tunDevice); err != nil {
+					logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", "route_host_add_failed", err.Error())
+				} else {
+					activeHostRouteTarget = targetIP
+				}
+			}
+
 			if deps.shouldCheckRouteOwner() && targetIP != "" {
 				iface, routeErr := deps.routeInterfaceForTarget(targetIP)
 				if routeErr != nil {
@@ -613,19 +802,13 @@ func runRunningStateGuard(
 		if !failed {
 			failures = 0
 			logCandidateDecision(gui, cliOnly, 1, 1, "running", "pass", "peer_ready", fmt.Sprintf("target=%s", targetIP))
-			continue
-		}
-
-		if time.Since(startedAt) < cfg.protectionWindow {
-			failures = 0
-			logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", reason, fmt.Sprintf("within_protection_window: %s", detail))
-			continue
+			return false
 		}
 
 		failures++
 		logCandidateDecision(gui, cliOnly, 1, 1, "running", "warn", reason, fmt.Sprintf("consecutive_failures=%d/%d %s", failures, cfg.consecutiveFailed, detail))
 		if failures < cfg.consecutiveFailed {
-			continue
+			return false
 		}
 
 		errMsg := formatConnectError(ErrorCodePeerUnreachable, fmt.Errorf("running health degraded: %s", detail))
@@ -634,7 +817,42 @@ func runRunningStateGuard(
 		case sessionStop <- struct{}{}:
 		default:
 		}
-		return
+		return true
+	}
+
+	for {
+		select {
+		case <-stop:
+			if deps.removeHostRouteForTarget != nil && activeHostRouteTarget != "" {
+				_ = deps.removeHostRouteForTarget(activeHostRouteTarget, tunDevice)
+			}
+			return
+		case evt, ok := <-events:
+			if !ok {
+				return
+			}
+			if evt.Type == EasyTierEventProcessExit {
+				errMsg := formatConnectError(ErrorCodePeerUnreachable, fmt.Errorf("running health degraded: easytier process exited"))
+				setSessionError(gui, apiPort, ErrorCodePeerUnreachable, errMsg)
+				select {
+				case sessionStop <- struct{}{}:
+				default:
+				}
+				return
+			}
+			if evt.Type == EasyTierEventSnapshotError && evt.Err != nil {
+				if evaluate(PeerReadiness{Ready: false, NonSelfPresent: false, PeerClass: peerClassNone}) {
+					return
+				}
+			}
+		case snap, ok := <-snapshots:
+			if !ok {
+				return
+			}
+			if evaluate(snap.Readiness) {
+				return
+			}
+		}
 	}
 }
 
@@ -666,7 +884,7 @@ func printPeerInfoLoop(stop <-chan struct{}, fetch func() (PeerInfoSnapshot, err
 	}
 
 	printSnapshot()
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(defaultPeerInfoRefreshInterval)
 	defer ticker.Stop()
 	for {
 		select {

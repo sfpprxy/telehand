@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+func TestDefaultPeersValue(t *testing.T) {
+	const want = "tcp://43.139.65.49:11010"
+	if DefaultPeers != want {
+		t.Fatalf("unexpected DefaultPeers: got=%q want=%q", DefaultPeers, want)
+	}
+}
+
 func TestBuildConfigFromInputs(t *testing.T) {
 	cfg, err := buildConfigFromInputs(" net ", " secret ", " tcp://1.1.1.1:11010 , tcp://2.2.2.2:11010 ")
 	if err != nil {

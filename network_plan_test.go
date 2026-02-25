@@ -60,3 +60,30 @@ func TestFilterNonConflictingCandidates(t *testing.T) {
 		t.Fatalf("unexpected candidate kept: %+v", filtered[0])
 	}
 }
+
+func TestParseRouteNetsFromLines(t *testing.T) {
+	text := `
+Destination        Gateway            Flags
+default            192.168.1.1        UGSc
+10.206.246.0/24    10.0.0.1           UGSc
+10.8.0.1           link#6             UHWI
+`
+	nets := parseRouteNetsFromLines(text)
+	got := normalizeUsedNets(nets)
+	if len(got) == 0 {
+		t.Fatalf("expected parsed route nets, got empty")
+	}
+	hasSubnet := false
+	hasHost := false
+	for _, n := range got {
+		if n == "10.206.246.0/24" {
+			hasSubnet = true
+		}
+		if n == "10.8.0.1/32" {
+			hasHost = true
+		}
+	}
+	if !hasSubnet || !hasHost {
+		t.Fatalf("missing expected nets, got %v", got)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/base32"
 	"fmt"
@@ -209,11 +210,205 @@ func interfaceByIPv4(ipv4 string) (string, error) {
 
 func chooseCandidates(networkHash, role string, usedNets []*net.IPNet) []IPv4Candidate {
 	candidates := buildIPv4Candidates(networkHash, role, defaultSubnetCandidateCount)
-	filtered := filterNonConflictingCandidates(candidates, usedNets)
+	allUsed := make([]*net.IPNet, 0, len(usedNets)+16)
+	allUsed = append(allUsed, usedNets...)
+	if routeNets, err := collectRouteIPv4Nets(); err == nil {
+		allUsed = append(allUsed, routeNets...)
+	}
+
+	filtered := filterNonConflictingCandidates(candidates, allUsed)
 	if len(filtered) > 0 {
 		return filtered
 	}
 	return candidates
+}
+
+func collectRouteIPv4Nets() ([]*net.IPNet, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("netstat", "-rn", "-f", "inet")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("netstat failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return parseRouteNetsFromLines(string(out)), nil
+	case "linux":
+		cmd := exec.Command("ip", "-4", "route", "show")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("ip route failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return parseRouteNetsFromLines(string(out)), nil
+	case "windows":
+		script := "Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DestinationPrefix"
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("Get-NetRoute failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return parseRouteNetsFromLines(string(out)), nil
+	default:
+		return nil, fmt.Errorf("route scan unsupported on %s", runtime.GOOS)
+	}
+}
+
+func parseRouteNetsFromLines(text string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, 32)
+	seen := make(map[string]struct{})
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(strings.ToLower(line), "destination") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		for _, candidate := range candidateRoutePrefixes(fields) {
+			prefix := normalizeRoutePrefix(candidate)
+			if prefix == "" {
+				continue
+			}
+			_, ipNet, err := net.ParseCIDR(prefix)
+			if err != nil || ipNet == nil || ipNet.IP.To4() == nil {
+				continue
+			}
+			key := ipNet.String()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, ipNet)
+		}
+	}
+	return out
+}
+
+func candidateRoutePrefixes(fields []string) []string {
+	// Prefer the first column from table outputs; also scan remaining fields for explicit CIDR.
+	out := []string{fields[0]}
+	for i := 1; i < len(fields); i++ {
+		if strings.Contains(fields[i], "/") {
+			out = append(out, fields[i])
+		}
+	}
+	return out
+}
+
+func normalizeRoutePrefix(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	lower := strings.ToLower(v)
+	if lower == "default" {
+		return ""
+	}
+	if strings.HasPrefix(lower, "link#") || strings.HasPrefix(lower, "on-link") {
+		return ""
+	}
+	if strings.Contains(v, "/") {
+		return v
+	}
+	ip := net.ParseIP(v).To4()
+	if ip == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/32", ip.String())
+}
+
+func addHostRouteForTarget(targetIP, tunDevice string) error {
+	target := strings.TrimSpace(targetIP)
+	if net.ParseIP(target) == nil {
+		return fmt.Errorf("invalid target ip: %q", targetIP)
+	}
+	iface := strings.TrimSpace(tunDevice)
+	if iface == "" {
+		return fmt.Errorf("empty tun device")
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("route", "-n", "add", "-host", target, "-interface", iface)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			// Route may already exist for retries; treat as success.
+			if strings.Contains(strings.ToLower(string(out)), "file exists") {
+				return nil
+			}
+			return fmt.Errorf("route add failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	case "linux":
+		cmd := exec.Command("ip", "route", "replace", fmt.Sprintf("%s/32", target), "dev", iface)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("ip route replace failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	case "windows":
+		script := fmt.Sprintf("if(-not (Get-NetRoute -DestinationPrefix '%s/32' -InterfaceAlias '%s' -ErrorAction SilentlyContinue)){New-NetRoute -DestinationPrefix '%s/32' -InterfaceAlias '%s' -NextHop '0.0.0.0' -PolicyStore ActiveStore | Out-Null}", target, escapePowerShellSingleQuoted(iface), target, escapePowerShellSingleQuoted(iface))
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("New-NetRoute failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	default:
+		return fmt.Errorf("host route add unsupported on %s", runtime.GOOS)
+	}
+}
+
+func removeHostRouteForTarget(targetIP, tunDevice string) error {
+	target := strings.TrimSpace(targetIP)
+	if net.ParseIP(target) == nil {
+		return fmt.Errorf("invalid target ip: %q", targetIP)
+	}
+	iface := strings.TrimSpace(tunDevice)
+	if iface == "" {
+		return fmt.Errorf("empty tun device")
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("route", "-n", "delete", "-host", target, "-interface", iface)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			lower := strings.ToLower(string(out))
+			if strings.Contains(lower, "not in table") {
+				return nil
+			}
+			return fmt.Errorf("route delete failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	case "linux":
+		cmd := exec.Command("ip", "route", "del", fmt.Sprintf("%s/32", target), "dev", iface)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			lower := strings.ToLower(string(out))
+			if strings.Contains(lower, "no such process") {
+				return nil
+			}
+			return fmt.Errorf("ip route del failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	case "windows":
+		script := fmt.Sprintf("Get-NetRoute -DestinationPrefix '%s/32' -InterfaceAlias '%s' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue", target, escapePowerShellSingleQuoted(iface))
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("Remove-NetRoute failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	default:
+		return fmt.Errorf("host route delete unsupported on %s", runtime.GOOS)
+	}
+}
+
+func escapePowerShellSingleQuoted(v string) string {
+	return strings.ReplaceAll(strings.TrimSpace(v), "'", "''")
 }
 
 func normalizeUsedNets(nets []*net.IPNet) []string {

@@ -175,6 +175,7 @@ let peerPollTimer = null;
 let cachedDebugLogs = [];
 let windowsCommand = '';
 let unixCommand = '';
+const PEER_POLL_INTERVAL_MS = 3000;
 
 function normalizePhase(phase) {
   if (phase === 'init') return 'config';
@@ -198,7 +199,7 @@ function startDebugPoller() {
 
 function startPeerPoller() {
   if (peerPollTimer !== null) return;
-  peerPollTimer = setInterval(pollPeerInfo, 3000);
+  peerPollTimer = setInterval(pollPeerInfo, PEER_POLL_INTERVAL_MS);
 }
 
 function stopLogPoller() {
