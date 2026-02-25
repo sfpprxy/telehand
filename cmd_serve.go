@@ -14,7 +14,7 @@ func runServe(args []string) int {
 	noBrowser := fs.Bool("no-browser", false, "do not auto-open browser")
 	networkName := fs.String("network-name", "", "network name (used when no pairing code provided)")
 	networkSecret := fs.String("network-secret", "", "network secret (used when no pairing code provided)")
-	peers := fs.String("peers", "", "comma-separated peers (used when no pairing code provided)")
+	peers := fs.String("peers", "", "comma-separated peer pool (used when no pairing code provided, latency-first fallback)")
 	if err := fs.Parse(args); err != nil {
 		return ExitCodeParam
 	}
@@ -62,6 +62,7 @@ func runServe(args []string) int {
 	}
 
 	fmt.Printf("Serve network: name=%s secret=%s peers=%s\n", cfg.NetworkName, maskSecret(cfg.NetworkSecret), strings.Join(cfg.Peers, ","))
+	fmt.Println("Peer strategy: latency-first ordering + fallback (details in debug logs).")
 	return runSession(sessionOptions{
 		Role:          "server",
 		NoBrowser:     *noBrowser,

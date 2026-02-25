@@ -41,10 +41,13 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .cmd-title { color: #7a6130; font-size: 13px; margin-bottom: 8px; }
 .cmd-row { margin-bottom: 8px; }
 .cmd-platform { font-size: 12px; color: #666; margin-bottom: 4px; }
-.cmd-text { font-family: monospace; background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px; font-size: 12px; word-break: break-all; }
+.cmd-entry { display: flex; align-items: stretch; gap: 8px; }
+.cmd-text { flex: 1; font-family: monospace; background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px; font-size: 12px; word-break: break-all; }
 .cmd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.cmd-actions-inline { margin-top: 0; flex-wrap: nowrap; align-items: center; }
 .peer-section { margin-top: 18px; text-align: left; }
 .peer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.peer-header-right { display: flex; gap: 8px; align-items: center; }
 .peer-title { font-size: 14px; color: #555; }
 .peer-updated { font-size: 12px; color: #8a8a8a; }
 .peer-wrap { overflow-x: auto; border: 1px solid #ddd; border-radius: 8px; }
@@ -55,10 +58,13 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .peer-hint { font-size: 12px; color: #888; margin-top: 8px; }
 .baseline-box { margin-top: 12px; text-align: left; background: #f7f8fb; border: 1px solid #dfe3ee; border-radius: 8px; padding: 10px; font-size: 12px; color: #445; }
 .baseline-row { margin: 2px 0; font-family: monospace; word-break: break-all; }
+.session-copy-actions { margin-top: 8px; justify-content: center; }
 @media (max-width: 640px) {
   .container { padding: 16px; }
   .ip-box { flex-direction: column; }
   .ip-text { font-size: 18px; }
+  .cmd-entry { flex-direction: column; }
+  .cmd-actions-inline { justify-content: flex-end; }
 }
 </style>
 </head>
@@ -75,38 +81,19 @@ textarea:focus { outline: none; border-color: #4a90d9; }
   </div>
 
   <div id="phase-connecting" class="hidden">
-    <p class="subtitle phase-connecting">正在连接网络，请稍候...</p>
-    <div class="debug-section">
-      <div class="debug-header">
-        <span class="debug-title">Debug 日志</span>
-        <button class="btn-copy" onclick="copyDebugLogs(this)">复制日志</button>
-      </div>
-      <div class="debug-area" id="debug-area-connecting"></div>
-    </div>
-  </div>
+    <p class="subtitle phase-connecting" id="connecting-status">正在连接网络，请稍候...</p>
 
-  <div id="phase-running" class="hidden">
-    <p class="subtitle"><span class="dot dot-green"></span>远程协助已启动</p>
-    <div class="ip-box">
-      <span class="ip-text" id="virt-ip"></span>
-      <button class="btn-copy" onclick="copyIP(this)">复制</button>
-    </div>
-    <p style="color:#888;font-size:13px;" id="port-info"></p>
-    <p style="color:#888;font-size:13px;margin-top:4px;" id="running-hint">请将上方 IP 发送给对方</p>
-
-    <div id="command-section" class="cmd-section hidden">
+    <div id="command-section-connecting" class="cmd-section hidden">
       <div class="cmd-title">在被控端执行以下命令（可复制）</div>
-      <div id="command-list"></div>
-      <div class="cmd-actions">
-        <button class="btn-copy hidden" id="btn-copy-command-windows" onclick="copyCommandByType('windows', this)">复制 Windows 命令</button>
-        <button class="btn-copy hidden" id="btn-copy-command-unix" onclick="copyCommandByType('unix', this)">复制 macOS/Linux 命令</button>
-      </div>
+      <div id="command-list-connecting"></div>
     </div>
 
     <div class="peer-section">
       <div class="peer-header">
-        <span class="peer-title" id="peer-title">Peer Info</span>
-        <span class="peer-updated" id="peer-updated">-</span>
+        <span class="peer-title" id="peer-title-connecting">Peer Info</span>
+        <div class="peer-header-right">
+          <span class="peer-updated" id="peer-updated-connecting">-</span>
+        </div>
       </div>
       <div class="peer-wrap">
         <table class="peer-table">
@@ -123,10 +110,77 @@ textarea:focus { outline: none; border-color: #4a90d9; }
               <th>Version</th>
               <th>Role</th>
               <th>Local</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="peer-table-body-connecting">
+            <tr><td colspan="12" class="peer-hint">等待网络数据...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="baseline-box">
+      <div><strong>Connect Progress</strong></div>
+      <div class="baseline-row" id="connecting-baseline-peer">current_peer: -</div>
+      <div class="baseline-row" id="connecting-baseline-subnet">virtual_subnet: -</div>
+      <div class="baseline-row" id="connecting-baseline-hash">network_hash: -</div>
+      <div class="baseline-row" id="connecting-baseline-reason">last_switch_reason: -</div>
+      <div class="baseline-row" id="connecting-baseline-endpoint">business_endpoint_status: -</div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-header">
+        <span class="debug-title">Debug 日志</span>
+        <button class="btn-copy" onclick="copyDebugLogs(this)">复制日志</button>
+      </div>
+      <div class="debug-area" id="debug-area-connecting"></div>
+    </div>
+  </div>
+
+  <div id="phase-running" class="hidden">
+    <p class="subtitle"><span class="dot dot-green"></span>远程协助已启动</p>
+    <div class="ip-box">
+      <span class="ip-text" id="virt-ip"></span>
+    </div>
+    <div id="session-copy-actions" class="cmd-actions session-copy-actions">
+      <button class="btn-copy" onclick="copyConnectionInfo(this)">复制连接信息</button>
+    </div>
+    <p style="color:#888;font-size:13px;" id="port-info"></p>
+    <p style="color:#888;font-size:13px;margin-top:4px;" id="running-hint">可在当前页面直接复制连接信息与给 AI 的 Prompt。</p>
+
+    <div id="command-section" class="cmd-section hidden">
+      <div class="cmd-title">在被控端执行以下命令（可复制）</div>
+      <div id="command-list"></div>
+    </div>
+
+    <div class="peer-section">
+      <div class="peer-header">
+        <span class="peer-title" id="peer-title">Peer Info</span>
+        <div class="peer-header-right">
+          <span class="peer-updated" id="peer-updated">-</span>
+        </div>
+      </div>
+      <div class="peer-wrap">
+        <table class="peer-table">
+          <thead>
+            <tr>
+              <th>Virtual IPv4</th>
+              <th>Hostname</th>
+              <th>Route Cost</th>
+              <th>Protocol</th>
+              <th>Latency</th>
+              <th>Upload</th>
+              <th>Download</th>
+              <th>Loss Rate</th>
+              <th>Version</th>
+              <th>Role</th>
+              <th>Local</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="peer-table-body">
-            <tr><td colspan="11" class="peer-hint">等待网络数据...</td></tr>
+            <tr><td colspan="12" class="peer-hint">等待网络数据...</td></tr>
           </tbody>
         </table>
       </div>
@@ -137,6 +191,8 @@ textarea:focus { outline: none; border-color: #4a90d9; }
       <div class="baseline-row" id="baseline-tun">tun_device: -</div>
       <div class="baseline-row" id="baseline-subnet">virtual_subnet: -</div>
       <div class="baseline-row" id="baseline-hash">network_hash: -</div>
+      <div class="baseline-row" id="baseline-peer">current_peer: -</div>
+      <div class="baseline-row" id="baseline-switch">last_switch_reason: -</div>
     </div>
 
     <div class="log-area" id="log-area"></div>
@@ -173,9 +229,12 @@ let logPollTimer = null;
 let debugPollTimer = null;
 let peerPollTimer = null;
 let cachedDebugLogs = [];
-let windowsCommand = '';
-let unixCommand = '';
+let latestPeerSnapshot = null;
+let lastNonEmptyPeerSnapshot = null;
+let lastNonSelfPeerSnapshot = null;
+let lastNonSelfPeerSnapshotAt = 0;
 const PEER_POLL_INTERVAL_MS = 3000;
+const CONNECTING_PEER_STALE_TTL_MS = 6000;
 
 function normalizePhase(phase) {
   if (phase === 'init') return 'config';
@@ -241,7 +300,13 @@ function syncPollersByPhase(phase) {
     startPeerPoller();
     return;
   }
-  if (phase === 'connecting' || phase === 'error') {
+  if (phase === 'connecting') {
+    stopLogPoller();
+    startDebugPoller();
+    startPeerPoller();
+    return;
+  }
+  if (phase === 'error') {
     stopLogPoller();
     startDebugPoller();
     stopPeerPoller();
@@ -285,25 +350,37 @@ function renderRole(state) {
   );
   const hint = document.getElementById('running-hint');
   if (role === 'client') {
-    hint.textContent = '控制端已连接，请把下方命令发给被控端执行。';
+    hint.textContent = '接收协助端进入 running 后，可在当前页面直接复制连接信息或给 AI 的 Prompt。';
   } else {
-    hint.textContent = '请将上方 IP 发送给对方';
+    hint.textContent = '连接信息会同步显示在发起协助端 Web GUI，无需手动回传。';
   }
 }
 
 function updatePeerTitle(networkOwner, networkHash) {
-  const title = document.getElementById('peer-title');
   const owner = networkOwner ? String(networkOwner).trim() : '';
   const hash = networkHash ? String(networkHash).trim() : '';
-  if (!owner && !hash) {
-    title.textContent = 'Peer Info';
-    return;
-  }
+  let text = 'Peer Info';
   if (owner && hash) {
-    title.textContent = 'Peer Info (' + owner + ':' + hash + ')';
-    return;
+    text = 'Peer Info (' + owner + ':' + hash + ')';
+  } else if (owner || hash) {
+    text = 'Peer Info (' + (owner || hash) + ')';
   }
-  title.textContent = 'Peer Info (' + (owner || hash) + ')';
+  const title = document.getElementById('peer-title');
+  const titleConnecting = document.getElementById('peer-title-connecting');
+  if (title) title.textContent = text;
+  if (titleConnecting) titleConnecting.textContent = text;
+}
+
+function renderConnecting(state) {
+  renderRole(state);
+  const status = state && state.business_endpoint_status ? String(state.business_endpoint_status) : '业务端还未连接，等待中...';
+  document.getElementById('connecting-status').textContent = status;
+  document.getElementById('connecting-baseline-peer').textContent = 'current_peer: ' + ((state && state.current_peer) ? state.current_peer : '-');
+  document.getElementById('connecting-baseline-subnet').textContent = 'virtual_subnet: ' + ((state && state.virtual_subnet) ? state.virtual_subnet : '-');
+  document.getElementById('connecting-baseline-hash').textContent = 'network_hash: ' + ((state && state.network_hash) ? state.network_hash : '-');
+  document.getElementById('connecting-baseline-reason').textContent = 'last_switch_reason: ' + ((state && state.last_switch_reason) ? state.last_switch_reason : '-');
+  document.getElementById('connecting-baseline-endpoint').textContent = 'business_endpoint_status: ' + status;
+  renderCommands(state);
 }
 
 function renderRunning(state) {
@@ -313,62 +390,211 @@ function renderRunning(state) {
   const endpoint = virtIP && apiPort ? virtIP + ':' + apiPort : '';
   document.getElementById('virt-ip').textContent = endpoint;
   document.getElementById('port-info').textContent = endpoint ? ('API 地址: http://' + endpoint) : '';
+  document.getElementById('session-copy-actions').classList.toggle('hidden', !endpoint);
   document.getElementById('baseline-tun').textContent = 'tun_device: ' + ((state && state.tun_device) ? state.tun_device : '-');
   document.getElementById('baseline-subnet').textContent = 'virtual_subnet: ' + ((state && state.virtual_subnet) ? state.virtual_subnet : '-');
   document.getElementById('baseline-hash').textContent = 'network_hash: ' + ((state && state.network_hash) ? state.network_hash : '-');
+  document.getElementById('baseline-peer').textContent = 'current_peer: ' + ((state && state.current_peer) ? state.current_peer : '-');
+  document.getElementById('baseline-switch').textContent = 'last_switch_reason: ' + ((state && state.last_switch_reason) ? state.last_switch_reason : '-');
   renderCommands(state);
 }
 
-function renderCommands(state) {
-  const section = document.getElementById('command-section');
-  const list = document.getElementById('command-list');
-  const windowsBtn = document.getElementById('btn-copy-command-windows');
-  const unixBtn = document.getElementById('btn-copy-command-unix');
-  list.innerHTML = '';
+function hasPeerRows(snapshot) {
+  return !!(snapshot && Array.isArray(snapshot.peers) && snapshot.peers.length > 0);
+}
 
-  const commands = state && Array.isArray(state.commands) ? state.commands : [];
-  windowsCommand = '';
-  unixCommand = '';
-  if (commands.length === 0) {
-    windowsBtn.classList.add('hidden');
-    unixBtn.classList.add('hidden');
-    section.classList.add('hidden');
+function nonSelfPeers(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.peers)) {
+    return [];
+  }
+  return snapshot.peers.filter((p) => !(p && p.is_self));
+}
+
+function hasNonSelfPeerRows(snapshot) {
+  return nonSelfPeers(snapshot).length > 0;
+}
+
+function peerRowKey(p) {
+  if (!p || typeof p !== 'object') {
+    return '';
+  }
+  const id = p.peer_id ? String(p.peer_id).trim() : '';
+  if (id) {
+    return 'id:' + id;
+  }
+  const ip = p.virtual_ipv4 ? String(p.virtual_ipv4).trim() : '';
+  const host = p.hostname ? String(p.hostname).trim() : '';
+  const role = p.role ? String(p.role).trim() : '';
+  return 'key:' + ip + '|' + host + '|' + role;
+}
+
+function cloneSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return null;
+  }
+  const peers = Array.isArray(snapshot.peers) ? snapshot.peers.map((p) => Object.assign({}, p)) : [];
+  return {
+    updated_at: snapshot.updated_at || '',
+    network_owner: snapshot.network_owner || '',
+    network_hash: snapshot.network_hash || '',
+    peers: peers,
+  };
+}
+
+function mergeSnapshotWithCachedNonSelf(incoming, cached) {
+  const base = cloneSnapshot(incoming);
+  if (!base) {
+    return cloneSnapshot(cached);
+  }
+  const cachedPeers = nonSelfPeers(cached);
+  if (cachedPeers.length === 0) {
+    return base;
+  }
+
+  const seen = new Set();
+  base.peers.forEach((p) => {
+    const key = peerRowKey(p);
+    if (key) {
+      seen.add(key);
+    }
+  });
+
+  cachedPeers.forEach((p) => {
+    const key = peerRowKey(p);
+    if (!key || seen.has(key)) {
+      return;
+    }
+    const row = Object.assign({}, p);
+    const host = row.hostname ? String(row.hostname).trim() : '';
+    if (host && !host.includes('(缓存)')) {
+      row.hostname = host + ' (缓存)';
+    }
+    base.peers.push(row);
+    seen.add(key);
+  });
+  return base;
+}
+
+function buildConnectingFallbackSnapshot(state) {
+  const currentPeer = state && state.current_peer ? String(state.current_peer).trim() : '';
+  if (!currentPeer) {
+    return null;
+  }
+  const selfRole = state && state.role ? String(state.role).trim() : '-';
+  const selfIP = state && state.virt_ip ? String(state.virt_ip).trim() : '-';
+  return {
+    updated_at: '',
+    network_owner: state && state.network_owner ? String(state.network_owner) : '',
+    network_hash: state && state.network_hash ? String(state.network_hash) : '',
+    peers: [
+      {
+        virtual_ipv4: selfIP || '-',
+        hostname: '(self)',
+        route_cost: 'Local',
+        protocol: '-',
+        latency: '-',
+        upload: '-',
+        download: '-',
+        loss_rate: '-',
+        version: '-',
+        role: selfRole || '-',
+        is_self: true,
+      },
+      {
+        virtual_ipv4: '-',
+        hostname: currentPeer,
+        route_cost: '-',
+        protocol: '-',
+        latency: '-',
+        upload: '-',
+        download: '-',
+        loss_rate: '-',
+        version: '-',
+        role: 'candidate',
+        is_self: false,
+      },
+    ],
+  };
+}
+
+function renderPeerTable(snapshot, bodyId, updatedId, stale) {
+  const body = document.getElementById(bodyId);
+  const updated = document.getElementById(updatedId);
+  if (!body || !updated) {
+    return;
+  }
+  if (!snapshot || !Array.isArray(snapshot.peers) || snapshot.peers.length === 0) {
+    body.innerHTML = '<tr><td colspan="12" class="peer-hint">等待网络数据...</td></tr>';
+    updated.textContent = '-';
     return;
   }
 
+  body.innerHTML = snapshot.peers.map((p, idx) => {
+    const cls = p.is_self ? 'peer-self' : '';
+    const local = p.is_self ? '*' : '';
+    const action = (hasVirtualIPv4(p && p.virtual_ipv4) && !isClientRole(p && p.role))
+      ? '<button class="btn-copy" data-peer-idx="' + idx + '" data-body-id="' + escapeHtml(bodyId) + '">复制给 AI 的 Prompt</button>'
+      : '-';
+    return '<tr class="' + cls + '">' +
+      '<td>' + escapeHtml(p.virtual_ipv4 || '-') + '</td>' +
+      '<td>' + escapeHtml(p.hostname || '-') + '</td>' +
+      '<td>' + escapeHtml(p.route_cost || '-') + '</td>' +
+      '<td>' + escapeHtml(p.protocol || '-') + '</td>' +
+      '<td>' + escapeHtml(p.latency || '-') + '</td>' +
+      '<td>' + escapeHtml(p.upload || '-') + '</td>' +
+      '<td>' + escapeHtml(p.download || '-') + '</td>' +
+      '<td>' + escapeHtml(p.loss_rate || '-') + '</td>' +
+      '<td>' + escapeHtml(p.version || '-') + '</td>' +
+      '<td>' + escapeHtml(p.role || '-') + '</td>' +
+      '<td>' + local + '</td>' +
+      '<td>' + action + '</td>' +
+      '</tr>';
+  }).join('');
+
+  body.querySelectorAll('button[data-peer-idx]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const rawIdx = btn.getAttribute('data-peer-idx');
+      const idx = Number(rawIdx);
+      if (!Number.isInteger(idx) || idx < 0) return;
+      const peers = snapshot && Array.isArray(snapshot.peers) ? snapshot.peers : [];
+      if (idx >= peers.length) return;
+      copyAIPromptForPeer(peers[idx], btn);
+    });
+  });
+
+  if (snapshot.updated_at) {
+    updated.textContent = '更新时间: ' + snapshot.updated_at + (stale ? ' (缓存)' : '');
+  } else {
+    updated.textContent = stale ? '更新时间: - (缓存)' : '-';
+  }
+}
+
+function renderCommands(state) {
+  const commands = state && Array.isArray(state.commands) ? state.commands : [];
   const rows = [];
-  const extraRows = [];
   commands.forEach((item) => {
     const platform = item && item.platform ? String(item.platform).trim() : '';
     const command = item && item.command ? String(item.command).trim() : '';
     if (!command) return;
-
-    const platformLower = platform.toLowerCase();
-    if (!windowsCommand && platformLower.includes('windows')) {
-      windowsCommand = command;
-      return;
-    }
-    if (!unixCommand && (platformLower.includes('mac') || platformLower.includes('linux'))) {
-      unixCommand = command;
-      return;
-    }
-    extraRows.push({
+    rows.push({
       platform: platform || '未知平台',
       command: command,
     });
   });
 
-  if (windowsCommand) {
-    rows.push({platform: 'Windows (PowerShell)', command: windowsCommand});
-  }
-  if (unixCommand) {
-    rows.push({platform: 'macOS / Linux', command: unixCommand});
-  }
-  rows.push(...extraRows);
+  renderCommandSection('command-section', 'command-list', rows);
+  renderCommandSection('command-section-connecting', 'command-list-connecting', rows);
+}
 
-  if (rows.length === 0) {
-    windowsBtn.classList.add('hidden');
-    unixBtn.classList.add('hidden');
+function renderCommandSection(sectionId, listId, rows) {
+  const section = document.getElementById(sectionId);
+  const list = document.getElementById(listId);
+  if (!section || !list) {
+    return;
+  }
+
+  list.innerHTML = '';
+  if (!rows || rows.length === 0) {
     section.classList.add('hidden');
     return;
   }
@@ -385,13 +611,26 @@ function renderCommands(state) {
     cmd.className = 'cmd-text';
     cmd.textContent = item.command || '';
 
+    const actions = document.createElement('div');
+    actions.className = 'cmd-actions cmd-actions-inline';
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-copy';
+    copyBtn.textContent = '复制';
+    copyBtn.addEventListener('click', () => {
+      copyCommandText(item.command || '', copyBtn);
+    });
+    actions.appendChild(copyBtn);
+
+    const entry = document.createElement('div');
+    entry.className = 'cmd-entry';
+    entry.appendChild(cmd);
+    entry.appendChild(actions);
+
     row.appendChild(platform);
-    row.appendChild(cmd);
+    row.appendChild(entry);
     list.appendChild(row);
   });
 
-  windowsBtn.classList.toggle('hidden', !windowsCommand);
-  unixBtn.classList.toggle('hidden', !unixCommand);
   section.classList.remove('hidden');
 }
 
@@ -424,7 +663,7 @@ function setPhase(phase, state) {
   } else if (normalized === 'error') {
     renderError(state || {});
   } else if (normalized === 'connecting') {
-    renderRole(state || {});
+    renderConnecting(state || {});
   }
 
   syncPollersByPhase(normalized);
@@ -440,6 +679,8 @@ function applyServerState(state) {
 
   if (nextPhase === 'running') {
     renderRunning(currentState);
+  } else if (nextPhase === 'connecting') {
+    renderConnecting(currentState);
   } else if (nextPhase === 'error') {
     renderError(currentState);
   } else {
@@ -448,37 +689,49 @@ function applyServerState(state) {
 }
 
 function renderPeerInfo(snapshot) {
-  const ownerFromSnapshot = snapshot && snapshot.network_owner ? String(snapshot.network_owner) : '';
-  const ownerFromState = currentState && currentState.network_owner ? String(currentState.network_owner) : '';
-  const hashFromSnapshot = snapshot && snapshot.network_hash ? String(snapshot.network_hash) : '';
-  const hashFromState = currentState && currentState.network_hash ? String(currentState.network_hash) : '';
-  updatePeerTitle(ownerFromSnapshot || ownerFromState, hashFromSnapshot || hashFromState);
-  const body = document.getElementById('peer-table-body');
-  if (!snapshot || !Array.isArray(snapshot.peers) || snapshot.peers.length === 0) {
-    body.innerHTML = '<tr><td colspan="11" class="peer-hint">等待网络数据...</td></tr>';
-    document.getElementById('peer-updated').textContent = '-';
-    return;
+  const incoming = snapshot || null;
+  if (hasPeerRows(incoming)) {
+    lastNonEmptyPeerSnapshot = cloneSnapshot(incoming);
+  }
+  if (hasNonSelfPeerRows(incoming)) {
+    lastNonSelfPeerSnapshot = cloneSnapshot(incoming);
+    lastNonSelfPeerSnapshotAt = Date.now();
   }
 
-  body.innerHTML = snapshot.peers.map((p) => {
-    const cls = p.is_self ? 'peer-self' : '';
-    const local = p.is_self ? '*' : '';
-    return '<tr class="' + cls + '">' +
-      '<td>' + escapeHtml(p.virtual_ipv4 || '-') + '</td>' +
-      '<td>' + escapeHtml(p.hostname || '-') + '</td>' +
-      '<td>' + escapeHtml(p.route_cost || '-') + '</td>' +
-      '<td>' + escapeHtml(p.protocol || '-') + '</td>' +
-      '<td>' + escapeHtml(p.latency || '-') + '</td>' +
-      '<td>' + escapeHtml(p.upload || '-') + '</td>' +
-      '<td>' + escapeHtml(p.download || '-') + '</td>' +
-      '<td>' + escapeHtml(p.loss_rate || '-') + '</td>' +
-      '<td>' + escapeHtml(p.version || '-') + '</td>' +
-      '<td>' + escapeHtml(p.role || '-') + '</td>' +
-      '<td>' + local + '</td>' +
-      '</tr>';
-  }).join('');
+  let displaySnapshot = cloneSnapshot(incoming);
+  let stale = false;
+  const cacheFresh = currentPhase === 'connecting' &&
+    lastNonSelfPeerSnapshot &&
+    (Date.now() - lastNonSelfPeerSnapshotAt <= CONNECTING_PEER_STALE_TTL_MS);
 
-  document.getElementById('peer-updated').textContent = snapshot.updated_at ? ('更新时间: ' + snapshot.updated_at) : '-';
+  if (!hasPeerRows(displaySnapshot) && currentPhase === 'connecting' && hasPeerRows(lastNonEmptyPeerSnapshot)) {
+    displaySnapshot = cloneSnapshot(lastNonEmptyPeerSnapshot);
+    stale = true;
+  }
+  if (currentPhase === 'connecting' && cacheFresh && hasPeerRows(displaySnapshot) && !hasNonSelfPeerRows(displaySnapshot)) {
+    displaySnapshot = mergeSnapshotWithCachedNonSelf(displaySnapshot, lastNonSelfPeerSnapshot);
+    stale = true;
+  }
+  if (!hasPeerRows(displaySnapshot) && currentPhase === 'connecting' && cacheFresh) {
+    displaySnapshot = cloneSnapshot(lastNonSelfPeerSnapshot);
+    stale = true;
+  }
+  if (!hasPeerRows(displaySnapshot) && currentPhase === 'connecting') {
+    const fallback = buildConnectingFallbackSnapshot(currentState);
+    if (hasPeerRows(fallback)) {
+      displaySnapshot = fallback;
+      stale = true;
+    }
+  }
+
+  latestPeerSnapshot = displaySnapshot || null;
+  const ownerFromSnapshot = displaySnapshot && displaySnapshot.network_owner ? String(displaySnapshot.network_owner) : '';
+  const ownerFromState = currentState && currentState.network_owner ? String(currentState.network_owner) : '';
+  const hashFromSnapshot = displaySnapshot && displaySnapshot.network_hash ? String(displaySnapshot.network_hash) : '';
+  const hashFromState = currentState && currentState.network_hash ? String(currentState.network_hash) : '';
+  updatePeerTitle(ownerFromSnapshot || ownerFromState, hashFromSnapshot || hashFromState);
+  renderPeerTable(displaySnapshot, 'peer-table-body', 'peer-updated', stale);
+  renderPeerTable(displaySnapshot, 'peer-table-body-connecting', 'peer-updated-connecting', stale);
 }
 
 async function hydrateState() {
@@ -502,6 +755,8 @@ async function boot() {
   }
   if (currentPhase === 'running') {
     await pollLogs();
+    await pollPeerInfo();
+  } else if (currentPhase === 'connecting') {
     await pollPeerInfo();
   }
 }
@@ -591,10 +846,75 @@ function copyDebugLogs(btn) {
   });
 }
 
-function copyCommandByType(type, btn) {
-  const text = type === 'windows' ? windowsCommand : unixCommand;
-  if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
+function copyCommandText(text, btn) {
+  const value = text ? String(text).trim() : '';
+  if (!value) return;
+  navigator.clipboard.writeText(value).then(() => {
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+function currentEndpoint() {
+  if (currentState && currentState.virt_ip && typeof currentState.api_port === 'number' && currentState.api_port > 0) {
+    return String(currentState.virt_ip) + ':' + String(currentState.api_port);
+  }
+  const text = document.getElementById('virt-ip').textContent || '';
+  return text.trim();
+}
+
+function hasVirtualIPv4(value) {
+  const ip = value ? String(value).trim() : '';
+  if (!ip) return false;
+  if (ip === '-') return false;
+  return true;
+}
+
+function isClientRole(value) {
+  const role = value ? String(value).trim().toLowerCase() : '';
+  return role === 'client';
+}
+
+function buildAIPrompt(endpoint, peers) {
+  const base = 'http://' + endpoint;
+  const targets = Array.isArray(peers) ? peers : [];
+  const targetLines = targets.map((p, idx) => {
+    const ip = p && p.virtual_ipv4 ? String(p.virtual_ipv4) : '-';
+    const host = p && p.hostname ? String(p.hostname) : '-';
+    const role = p && p.role ? String(p.role) : '-';
+    const latency = p && p.latency ? String(p.latency) : '-';
+    return (idx + 1) + '. ' + ip + ' | ' + host + ' | role=' + role + ' | latency=' + latency;
+  });
+  return [
+    '你现在可以通过 Telehand 远程协助 API 操作目标机器。',
+    '连接信息: ' + endpoint,
+    'API Base URL: ' + base,
+    '候选目标:',
+    targetLines.length > 0 ? targetLines.join('\n') : '-',
+    '请先调用 GET ' + base + '/health，确认 phase=running。',
+    '然后请查看 https://github.com/sfpprxy/telehand/blob/main/SKILL.md，并按该文档协议调用 API。'
+  ].join('\n');
+}
+
+function copyConnectionInfo(btn) {
+  const endpoint = currentEndpoint();
+  if (!endpoint) return;
+  navigator.clipboard.writeText(endpoint).then(() => {
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+function copyAIPromptForPeer(peer, btn) {
+  const endpoint = currentEndpoint();
+  if (!endpoint) return;
+  if (!peer || !hasVirtualIPv4(peer.virtual_ipv4)) return;
+  if (isClientRole(peer.role)) return;
+  navigator.clipboard.writeText(buildAIPrompt(endpoint, [peer])).then(() => {
     if (!btn) return;
     const orig = btn.textContent;
     btn.textContent = '已复制';
@@ -607,15 +927,6 @@ async function stopAgent() {
   clearConfigInputSession();
   try { await fetch('/api/stop', {method:'POST'}); } catch(e) {}
   document.querySelector('.container').innerHTML = '<h1>已断开</h1><p class="subtitle" style="margin-top:12px;">远程协助已结束，可以关闭此页面。</p>';
-}
-
-function copyIP(btn) {
-  const text = document.getElementById('virt-ip').textContent;
-  navigator.clipboard.writeText(text).then(() => {
-    if (!btn) return;
-    btn.textContent = '已复制';
-    setTimeout(() => btn.textContent = '复制', 1500);
-  });
 }
 
 function showPhase(phase) {

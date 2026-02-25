@@ -33,7 +33,7 @@ type EasyTierStatePoller struct {
 
 func NewEasyTierStatePoller(et *EasyTier, interval time.Duration) *EasyTierStatePoller {
 	if interval <= 0 {
-		interval = defaultStateSnapshotPollInterval
+		interval = StatePollInterval
 	}
 	return &EasyTierStatePoller{et: et, interval: interval}
 }

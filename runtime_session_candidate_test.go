@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func TestEvaluateCandidateConnectivityRouteMismatchButReachable(t *testing.T) {
 		shouldCheckRouteOwner:   func() bool { return true },
 	}
 
-	got := evaluateCandidateConnectivity(nil, "utun9", 8080, cfg, deps, func(result, reason, detail string) {
+	got := evaluateCandidateConnectivity(nil, "utun9", 8080, cfg, deps, nil, func(result, reason, detail string) {
 		logs = append(logs, result+":"+reason+":"+detail)
 	})
 
@@ -66,7 +67,7 @@ func TestEvaluateCandidateConnectivityExplicitConflictEvidence(t *testing.T) {
 		shouldCheckRouteOwner:   func() bool { return true },
 	}
 
-	got := evaluateCandidateConnectivity(nil, "utun8", 8080, cfg, deps, func(string, string, string) {})
+	got := evaluateCandidateConnectivity(nil, "utun8", 8080, cfg, deps, nil, func(string, string, string) {})
 
 	if got.routeMismatchDetail == "" {
 		t.Fatalf("expected route mismatch detail, got %+v", got)
@@ -95,7 +96,7 @@ func TestEvaluateCandidateConnectivityRetryExhausted(t *testing.T) {
 		shouldCheckRouteOwner:   func() bool { return true },
 	}
 
-	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
+	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, nil, func(result, reason, detail string) {
 		logs = append(logs, result+":"+reason+":"+detail)
 	})
 
@@ -139,7 +140,7 @@ func TestEvaluateCandidateConnectivityNonSelfPeerWithoutVirtualIP(t *testing.T) 
 		shouldCheckRouteOwner:   func() bool { return true },
 	}
 
-	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
+	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, nil, func(result, reason, detail string) {
 		logs = append(logs, result+":"+reason+":"+detail)
 	})
 	if !got.nonSelfPresent {
@@ -176,7 +177,7 @@ func TestEvaluateCandidateConnectivityBusinessEndpointWaitingVirtualIP(t *testin
 		shouldCheckRouteOwner:   func() bool { return true },
 	}
 
-	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, func(result, reason, detail string) {
+	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, nil, func(result, reason, detail string) {
 		logs = append(logs, result+":"+reason+":"+detail)
 	})
 	if !got.nonSelfPresent {
@@ -187,5 +188,57 @@ func TestEvaluateCandidateConnectivityBusinessEndpointWaitingVirtualIP(t *testin
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "warn:business_endpoint_waiting:") {
 		t.Fatalf("expected business_endpoint_waiting warning, logs=%v", logs)
+	}
+}
+
+func TestEvaluateCandidateConnectivityInterruptedByStop(t *testing.T) {
+	stop := make(chan struct{})
+	close(stop)
+	cfg := candidateCheckConfig{
+		maxChecks:    3,
+		pollInterval: 5 * time.Millisecond,
+		probeTimout:  5 * time.Millisecond,
+	}
+	deps := sessionDeps{
+		queryPeerReadiness: func(*EasyTier) (PeerReadiness, error) {
+			return PeerReadiness{Ready: false}, nil
+		},
+		probePeerVirtualIP: func(string, int, time.Duration) error { return nil },
+		shouldCheckRouteOwner: func() bool { return false },
+	}
+
+	got := evaluateCandidateConnectivity(nil, "utun1", 8080, cfg, deps, stop, func(string, string, string) {})
+	if !errors.Is(got.lastProbeErr, errSessionInterrupted) {
+		t.Fatalf("expected interrupted error, got %+v", got)
+	}
+}
+
+func TestEvaluateCandidateConnectivitySnapshotErrorStopsAfterBudget(t *testing.T) {
+	origStartPoller := startStatePollerFn
+	t.Cleanup(func() { startStatePollerFn = origStartPoller })
+
+	snapshots := make(chan EasyTierSnapshot)
+	events := make(chan EasyTierEvent, 8)
+	startStatePollerFn = func(et *EasyTier, interval time.Duration, ctx context.Context) (<-chan EasyTierSnapshot, <-chan EasyTierEvent) {
+		return snapshots, events
+	}
+
+	cfg := candidateCheckConfig{
+		maxChecks:    3,
+		pollInterval: 5 * time.Millisecond,
+		probeTimout:  5 * time.Millisecond,
+	}
+	deps := sessionDeps{
+		probePeerVirtualIP:    func(string, int, time.Duration) error { return nil },
+		shouldCheckRouteOwner: func() bool { return false },
+	}
+
+	for i := 0; i < cfg.maxChecks; i++ {
+		events <- EasyTierEvent{Type: EasyTierEventSnapshotError, Err: errors.New("snapshot failed")}
+	}
+
+	got := evaluateCandidateConnectivity(&EasyTier{}, "utun1", 8080, cfg, deps, nil, func(string, string, string) {})
+	if got.peerQueryFailures < cfg.maxChecks {
+		t.Fatalf("expected peerQueryFailures >= %d, got %+v", cfg.maxChecks, got)
 	}
 }

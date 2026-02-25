@@ -12,6 +12,7 @@ Telehand 用于远程协助：接收协助端与发起协助端完成配对后�
   - [结束远程协助](#receiver-stop)
   - [卸载](#receiver-uninstall)
 - [发起协助端](#initiator)
+  - [一行命令安装并启动（推荐）](#initiator-quickstart)
   - [标准接入流程（推荐）](#initiator-standard-flow)
   - [自动带码与 GUI 粘贴说明](#initiator-auto-and-gui)
   - [连通性与状态检查](#initiator-health)
@@ -72,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | 
 3. 运行 Telehand（无参数默认进入 `serve` 模式）。
 4. 如果浏览器未自动打开，手动访问 `http://127.0.0.1:18080`。
 5. 在页面粘贴发起协助端发来的配置码，点击“启动远程协助”。
-6. 等页面进入 `running`，把页面中的会话地址（`虚拟IP:API端口`）发回发起协助端。
+6. 等页面进入 `running` 即可；无需再手动发回会话地址（`虚拟IP:API端口`），发起协助端可在自己的 Web GUI 直接查看并复制。
 
 平台差异说明：
 
@@ -94,19 +95,39 @@ curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | 
 <a id="initiator"></a>
 ## 发起协助端
 
-<a id="initiator-standard-flow"></a>
-### 标准接入流程（推荐）
+<a id="initiator-quickstart"></a>
+### 一行命令安装并启动（推荐）
 
-1. 在发起协助端运行：
+Windows（PowerShell 管理员）：
+
+```powershell
+iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 | iex; .\telehand.exe connect
+```
+
+macOS / Linux：
 
 ```bash
-telehand connect
+curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand connect
+```
+
+启动后参照标准接入流程使用
+
+<a id="initiator-standard-flow"></a>
+### 标准接入流程
+
+1. 若未使用一行命令安装并启动，则手动下载二进制，在发起协助端运行：
+
+```bash
+# macOS / Linux
+sudo telehand connect
+# Windows PowerShell(Admin)
+.\telehand.exe connect
 ```
 
 2. 程序会输出并自动复制“接收协助端安装+启动命令”（Windows / macOS / Linux）。
 3. 把对应命令发给接收协助端执行。
-4. 接收协助端进入 `running` 后，把页面显示的 `虚拟IP:API端口` 发回。
-5. 将该地址交给 AI Agent 执行远程控制。
+4. 接收协助端进入 `running` 后，发起协助端可在 Web GUI 直接查看连接信息（`虚拟IP:API端口`），无需接收协助端回传。
+5. 在 Web GUI 使用复制按钮，一键复制连接信息或“给 AI 的 prompt”，并交给 AI Agent 执行远程控制。
 
 <a id="initiator-auto-and-gui"></a>
 ### 自动带码与 GUI 粘贴说明
@@ -114,6 +135,7 @@ telehand connect
 - `serve/connect` 支持自动带码（`EncodedConfig` 自动提交）流程。
 - GUI 粘贴配置码流程仍然支持，未移除。
 - 两种方式可并存，按现场操作习惯选择即可。
+- `peers` 语义为“候选池”，连接时会做单轮延迟探测并按低延迟优先排序；运行中异常会按排序结果做 peer fallback，必要时再切换子网。
 
 <a id="initiator-health"></a>
 ### 连通性与状态检查

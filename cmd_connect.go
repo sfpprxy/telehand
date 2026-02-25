@@ -12,7 +12,7 @@ func runConnect(args []string) int {
 	fs.SetOutput(os.Stderr)
 	networkName := fs.String("network-name", "", "default network name when pairing code is not provided")
 	networkSecret := fs.String("network-secret", "", "default network secret when pairing code is not provided")
-	peers := fs.String("peers", "", "comma-separated peers when pairing code is not provided")
+	peers := fs.String("peers", "", "comma-separated peer pool when pairing code is not provided (latency-first fallback)")
 	noBrowser := fs.Bool("no-browser", false, "do not auto-open browser")
 	if err := fs.Parse(args); err != nil {
 		return ExitCodeParam
@@ -50,6 +50,7 @@ func runConnect(args []string) int {
 	}
 
 	fmt.Printf("Connect network: name=%s secret=%s peers=%s\n", cfg.NetworkName, maskSecret(cfg.NetworkSecret), strings.Join(cfg.Peers, ","))
+	fmt.Println("Peer strategy: latency-first ordering + fallback (details in debug logs).")
 
 	commands := buildRemoteInstallCommands(pairingCode)
 	fmt.Println("Run one of the following commands on the remote machine:")
@@ -80,12 +81,20 @@ func buildRemoteInstallCommands(pairingCode string) []InstallCommand {
 	code := strings.TrimSpace(pairingCode)
 	return []InstallCommand{
 		{
-			Platform: "Windows (PowerShell)",
+			Platform: "Windows (PowerShell，下载并运行)",
 			Command:  fmt.Sprintf("iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.ps1 | iex; .\\telehand.exe serve '%s'", code),
 		},
 		{
-			Platform: "macOS / Linux",
+			Platform: "macOS / Linux（下载并运行）",
 			Command:  fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand serve '%s'", code),
+		},
+		{
+			Platform: "Windows (PowerShell，仅运行)",
+			Command:  fmt.Sprintf(".\\telehand.exe serve '%s'", code),
+		},
+		{
+			Platform: "macOS / Linux（仅运行）",
+			Command:  fmt.Sprintf("sudo ./telehand serve '%s'", code),
 		},
 	}
 }

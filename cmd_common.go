@@ -14,8 +14,6 @@ import (
 )
 
 const (
-	DefaultPeers = "tcp://43.139.65.49:11010"
-
 	ExitCodeOK      = 0
 	ExitCodeParam   = 2
 	ExitCodeNetwork = 3
@@ -80,19 +78,6 @@ func submitEncodedConfig(encoded string, submitFn func(string) error) error {
 	return submitFn(code)
 }
 
-func parsePeers(peers string) []string {
-	items := strings.Split(peers, ",")
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		s := strings.TrimSpace(item)
-		if s == "" {
-			continue
-		}
-		out = append(out, s)
-	}
-	return out
-}
-
 func withDefaultNetworkInputs(networkName, networkSecret, peers string) (string, string, string) {
 	host := detectHostIdentity()
 	name := strings.TrimSpace(networkName)
@@ -105,10 +90,10 @@ func withDefaultNetworkInputs(networkName, networkSecret, peers string) (string,
 	if secret == "" {
 		secret = "telehand:" + host + random4Digits()
 	}
-	if peerList == "" {
-		peerList = DefaultPeers
-	}
-	return name, secret, peerList
+
+	userPool := parsePeers(peerList)
+	mergedPool := mergePeerPools(userPool, defaultPeerPool(), MaxPeerCount)
+	return name, secret, peerCSV(mergedPool)
 }
 
 func detectHostIdentity() string {

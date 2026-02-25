@@ -4,15 +4,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestDefaultPeersValue(t *testing.T) {
-	const want = "tcp://43.139.65.49:11010"
-	if DefaultPeers != want {
-		t.Fatalf("unexpected DefaultPeers: got=%q want=%q", DefaultPeers, want)
+	want := []string{
+		"tcp://43.139.65.49:11010",
+		"tcp://39.108.52.138:11010",
+	}
+	if !reflect.DeepEqual(DefaultPeers, want) {
+		t.Fatalf("unexpected DefaultPeers: got=%v want=%v", DefaultPeers, want)
 	}
 }
 
@@ -33,12 +37,13 @@ func TestBuildConfigFromInputs(t *testing.T) {
 }
 
 func TestBuildConfigFromInputsValidation(t *testing.T) {
-	_, err := buildConfigFromInputs("", "secret", DefaultPeers)
+	defaultCSV := peerCSV(defaultPeerPool())
+	_, err := buildConfigFromInputs("", "secret", defaultCSV)
 	if err == nil || !strings.Contains(err.Error(), "network name") {
 		t.Fatalf("expected network name validation error, got %v", err)
 	}
 
-	_, err = buildConfigFromInputs("name", "", DefaultPeers)
+	_, err = buildConfigFromInputs("name", "", defaultCSV)
 	if err == nil || !strings.Contains(err.Error(), "network secret") {
 		t.Fatalf("expected network secret validation error, got %v", err)
 	}
@@ -61,8 +66,9 @@ func TestWithDefaultNetworkInputs(t *testing.T) {
 	if !strings.HasPrefix(secret, "telehand:my-host") {
 		t.Fatalf("unexpected default secret: %q", secret)
 	}
-	if peers != DefaultPeers {
-		t.Fatalf("unexpected default peers: %q", peers)
+	gotPool := parsePeers(peers)
+	if !reflect.DeepEqual(gotPool, defaultPeerPool()) {
+		t.Fatalf("unexpected default peers: got=%v want=%v", gotPool, defaultPeerPool())
 	}
 }
 

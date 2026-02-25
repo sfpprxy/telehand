@@ -34,6 +34,9 @@ type GUIState struct {
 	NetworkHash      string           `json:"network_hash,omitempty"`
 	TUNDevice        string           `json:"tun_device,omitempty"`
 	VirtualSubnet    string           `json:"virtual_subnet,omitempty"`
+	CurrentPeer      string           `json:"current_peer,omitempty"`
+	LastSwitchReason string           `json:"last_switch_reason,omitempty"`
+	BusinessEndpoint string           `json:"business_endpoint_status,omitempty"`
 	VirtIP           string           `json:"virt_ip,omitempty"`
 	APIPort          int              `json:"api_port,omitempty"`
 	Error            string           `json:"error,omitempty"`

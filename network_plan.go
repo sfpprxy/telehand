@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultSubnetCandidateCount = 16
+	defaultSubnetCandidateCount = SubnetCandidateCount
 )
 
 type IPv4Candidate struct {
