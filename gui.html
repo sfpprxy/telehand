@@ -23,6 +23,7 @@ textarea:focus { outline: none; border-color: #4a90d9; }
 .ip-text { font-size: 22px; font-weight: bold; font-family: monospace; color: #2c3e50; word-break: break-all; }
 .btn-copy { padding: 6px 16px; font-size: 13px; background: #4a90d9; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .btn-copy:hover { background: #357abd; }
+.btn-copy:disabled { background: #b9c3cf; cursor: not-allowed; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
 .dot-green { background: #2ecc71; }
 .log-area { text-align: left; background: #1e1e1e; color: #d4d4d4; border-radius: 8px; padding: 12px; margin-top: 16px; height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px; }
@@ -532,8 +533,8 @@ function renderPeerTable(snapshot, bodyId, updatedId, stale) {
   body.innerHTML = snapshot.peers.map((p, idx) => {
     const cls = p.is_self ? 'peer-self' : '';
     const local = p.is_self ? '*' : '';
-    const action = (hasVirtualIPv4(p && p.virtual_ipv4) && !isClientRole(p && p.role))
-      ? '<button class="btn-copy" data-peer-idx="' + idx + '" data-body-id="' + escapeHtml(bodyId) + '">复制给 AI 的 Prompt</button>'
+    const action = canShowAIPromptButton(p)
+      ? '<button class="btn-copy" data-peer-idx="' + idx + '" data-body-id="' + escapeHtml(bodyId) + '" title="复制仅包含该目标的 AI Prompt">复制给 AI 的 Prompt</button>'
       : '-';
     return '<tr class="' + cls + '">' +
       '<td>' + escapeHtml(p.virtual_ipv4 || '-') + '</td>' +
@@ -838,23 +839,32 @@ async function pollPeerInfo() {
 
 function copyDebugLogs(btn) {
   const text = cachedDebugLogs.join('\n');
-  navigator.clipboard.writeText(text).then(() => {
-    if (!btn) return;
-    const orig = btn.textContent;
-    btn.textContent = '已复制';
-    setTimeout(() => btn.textContent = orig, 1500);
-  });
+  if (!text.trim()) {
+    flashCopyButton(btn, '无日志', 1800);
+    return;
+  }
+  copyTextToClipboard(text)
+    .then(() => flashCopyButton(btn, '已复制'))
+    .catch((err) => {
+      const msg = err && err.message ? err.message : String(err);
+      flashCopyButton(btn, '复制失败', 2000);
+      console.warn('copyDebugLogs failed:', msg);
+    });
 }
 
 function copyCommandText(text, btn) {
   const value = text ? String(text).trim() : '';
-  if (!value) return;
-  navigator.clipboard.writeText(value).then(() => {
-    if (!btn) return;
-    const orig = btn.textContent;
-    btn.textContent = '已复制';
-    setTimeout(() => btn.textContent = orig, 1500);
-  });
+  if (!value) {
+    flashCopyButton(btn, '无内容', 1800);
+    return;
+  }
+  copyTextToClipboard(value)
+    .then(() => flashCopyButton(btn, '已复制'))
+    .catch((err) => {
+      const msg = err && err.message ? err.message : String(err);
+      flashCopyButton(btn, '复制失败', 2000);
+      console.warn('copyCommandText failed:', msg);
+    });
 }
 
 function currentEndpoint() {
@@ -863,6 +873,32 @@ function currentEndpoint() {
   }
   const text = document.getElementById('virt-ip').textContent || '';
   return text.trim();
+}
+
+function currentAPIPort() {
+  if (currentState && typeof currentState.api_port === 'number' && currentState.api_port > 0) {
+    return currentState.api_port;
+  }
+  const endpoint = currentEndpoint();
+  if (!endpoint) return 0;
+  const idx = endpoint.lastIndexOf(':');
+  if (idx < 0) return 0;
+  const port = Number(endpoint.slice(idx + 1));
+  if (!Number.isInteger(port) || port <= 0) return 0;
+  return port;
+}
+
+function peerEndpoint(peer) {
+  const port = currentAPIPort();
+  const peerIP = peer && peer.virtual_ipv4 ? String(peer.virtual_ipv4).trim() : '';
+  if (hasVirtualIPv4(peerIP) && port > 0) {
+    return { endpoint: peerIP + ':' + String(port), fallback: false };
+  }
+  const fallbackEndpoint = currentEndpoint();
+  if (fallbackEndpoint) {
+    return { endpoint: fallbackEndpoint, fallback: true };
+  }
+  return { endpoint: '', fallback: false };
 }
 
 function hasVirtualIPv4(value) {
@@ -877,49 +913,96 @@ function isClientRole(value) {
   return role === 'client';
 }
 
+function isClientSessionRole() {
+  const role = currentState && currentState.role ? String(currentState.role).trim().toLowerCase() : '';
+  return role === 'client';
+}
+
+function canShowAIPromptButton(peer) {
+  if (!peer) return false;
+  if (!isClientSessionRole()) return false;
+  if (isClientRole(peer.role)) return false;
+  return hasVirtualIPv4(peer.virtual_ipv4);
+}
+
+function buildAIPromptAction(peer) {
+  if (!peer) return { enabled: false, reason: '目标 peer 不存在' };
+  if (isClientRole(peer.role)) return { enabled: false, reason: 'client 角色不支持该操作' };
+  const endpointInfo = peerEndpoint(peer);
+  if (!endpointInfo.endpoint) return { enabled: false, reason: '会话地址未就绪' };
+  return { enabled: true, reason: '' };
+}
+
 function buildAIPrompt(endpoint, peers) {
+  const _ = peers;
   const base = 'http://' + endpoint;
-  const targets = Array.isArray(peers) ? peers : [];
-  const targetLines = targets.map((p, idx) => {
-    const ip = p && p.virtual_ipv4 ? String(p.virtual_ipv4) : '-';
-    const host = p && p.hostname ? String(p.hostname) : '-';
-    const role = p && p.role ? String(p.role) : '-';
-    const latency = p && p.latency ? String(p.latency) : '-';
-    return (idx + 1) + '. ' + ip + ' | ' + host + ' | role=' + role + ' | latency=' + latency;
-  });
   return [
-    '你现在可以通过 Telehand 远程协助 API 操作目标机器。',
-    '连接信息: ' + endpoint,
-    'API Base URL: ' + base,
-    '候选目标:',
-    targetLines.length > 0 ? targetLines.join('\n') : '-',
+    '你现在可以通过 Telehand 远程协助 API 操作目标机器 ' + endpoint + '。',
     '请先调用 GET ' + base + '/health，确认 phase=running。',
-    '然后请查看 https://github.com/sfpprxy/telehand/blob/main/SKILL.md，并按该文档协议调用 API。'
+    '然后查看 https://raw.githubusercontent.com/sfpprxy/telehand/refs/heads/main/SKILL.md，根据该文档操作目标机器，协助完成我的任务。'
   ].join('\n');
 }
 
 function copyConnectionInfo(btn) {
   const endpoint = currentEndpoint();
-  if (!endpoint) return;
-  navigator.clipboard.writeText(endpoint).then(() => {
-    if (!btn) return;
-    const orig = btn.textContent;
-    btn.textContent = '已复制';
-    setTimeout(() => btn.textContent = orig, 1500);
-  });
+  if (!endpoint) {
+    flashCopyButton(btn, '地址未就绪', 2000);
+    return;
+  }
+  copyTextToClipboard(endpoint)
+    .then(() => flashCopyButton(btn, '已复制'))
+    .catch((err) => {
+      const msg = err && err.message ? err.message : String(err);
+      flashCopyButton(btn, '复制失败', 2000);
+      console.warn('copyConnectionInfo failed:', msg);
+    });
 }
 
 function copyAIPromptForPeer(peer, btn) {
-  const endpoint = currentEndpoint();
-  if (!endpoint) return;
-  if (!peer || !hasVirtualIPv4(peer.virtual_ipv4)) return;
-  if (isClientRole(peer.role)) return;
-  navigator.clipboard.writeText(buildAIPrompt(endpoint, [peer])).then(() => {
-    if (!btn) return;
-    const orig = btn.textContent;
-    btn.textContent = '已复制';
-    setTimeout(() => btn.textContent = orig, 1500);
-  });
+  const action = buildAIPromptAction(peer);
+  if (!action.enabled) {
+    flashCopyButton(btn, action.reason || '不可复制', 2000);
+    return;
+  }
+
+  const endpointInfo = peerEndpoint(peer);
+  const endpoint = endpointInfo.endpoint;
+  if (!endpoint) {
+    flashCopyButton(btn, '地址未就绪', 2000);
+    return;
+  }
+
+  copyTextToClipboard(buildAIPrompt(endpoint, [peer]))
+    .then(() => flashCopyButton(btn, endpointInfo.fallback ? '已复制(回退)' : '已复制', 1800))
+    .catch((err) => {
+      const msg = err && err.message ? err.message : String(err);
+      flashCopyButton(btn, '复制失败', 2000);
+      console.warn('copyAIPromptForPeer failed:', msg);
+    });
+}
+
+function copyTextToClipboard(text) {
+  const value = text ? String(text) : '';
+  if (!value.trim()) {
+    return Promise.reject(new Error('empty text'));
+  }
+  if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+    return Promise.reject(new Error('clipboard API unavailable'));
+  }
+  return navigator.clipboard.writeText(value);
+}
+
+function flashCopyButton(btn, text, durationMs) {
+  if (!btn) return;
+  const dur = typeof durationMs === 'number' && durationMs > 0 ? durationMs : 1500;
+  const original = btn.getAttribute('data-original-text') || btn.textContent;
+  if (!btn.getAttribute('data-original-text')) {
+    btn.setAttribute('data-original-text', original);
+  }
+  btn.textContent = text;
+  setTimeout(() => {
+    btn.textContent = original;
+  }, dur);
 }
 
 async function stopAgent() {

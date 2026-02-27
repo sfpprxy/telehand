@@ -35,7 +35,7 @@ iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/
 macOS / Linux：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand
 ```
 
 <a id="receiver-versioned-install"></a>
@@ -55,7 +55,7 @@ iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/
 macOS / Linux：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash -s -- --version v0.2.0-alpha.3 && sudo ./telehand
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash -s -- --version v0.2.0-alpha.3 && sudo ./telehand
 ```
 
 </details>
@@ -107,7 +107,7 @@ iwr -useb https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/
 macOS / Linux：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand connect
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand/main/install.sh | bash && sudo ./telehand connect
 ```
 
 启动后参照标准接入流程使用
