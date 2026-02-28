@@ -79,6 +79,8 @@ curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/sfpprxy/telehand
 
 - Windows：下载 `telehand-windows-amd64-vX.Y.Z.zip`，双击 `telehand.exe` 运行。
 - macOS：下载 `telehand-darwin-arm64-vX.Y.Z.zip`，若提示安全限制，在“系统设置 -> 隐私与安全性”允许打开，或右键选择“打开”。
+- Linux x86_64：下载 `telehand-linux-amd64-vX.Y.Z.zip`，解压后执行 `sudo ./telehand`。
+- Linux arm64/aarch64：下载 `telehand-linux-arm64-vX.Y.Z.zip`，解压后执行 `sudo ./telehand`。
 
 </details>
 

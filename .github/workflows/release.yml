@@ -31,6 +31,24 @@ jobs:
             et_core_dest: easytier-bin/easytier-core-darwin
             et_cli_dest: easytier-bin/easytier-cli-darwin
             output: telehand
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            et_asset: easytier-linux-x86_64-v2.4.5.zip
+            et_core: easytier-linux-x86_64/easytier-core
+            et_cli: easytier-linux-x86_64/easytier-cli
+            et_core_dest: easytier-bin/easytier-core-linux-amd64
+            et_cli_dest: easytier-bin/easytier-cli-linux-amd64
+            output: telehand
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            et_asset: easytier-linux-aarch64-v2.4.5.zip
+            et_core: easytier-linux-aarch64/easytier-core
+            et_cli: easytier-linux-aarch64/easytier-cli
+            et_core_dest: easytier-bin/easytier-core-linux-arm64
+            et_cli_dest: easytier-bin/easytier-cli-linux-arm64
+            output: telehand
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

@@ -8,6 +8,8 @@ ET_VERSION="${ET_VERSION:-2.4.5}"
 BIN_DIR="easytier-bin"
 WIN_ASSET="easytier-windows-x86_64-v${ET_VERSION}.zip"
 MAC_ASSET="easytier-macos-aarch64-v${ET_VERSION}.zip"
+LINUX_AMD64_ASSET="easytier-linux-x86_64-v${ET_VERSION}.zip"
+LINUX_ARM64_ASSET="easytier-linux-aarch64-v${ET_VERSION}.zip"
 
 mkdir -p "$BIN_DIR"
 TMP_DIR="$(mktemp -d)"
@@ -60,6 +62,36 @@ if [ "$need_darwin" = true ]; then
   extract_file "$mac_zip" "easytier-macos-aarch64/easytier-core" "$BIN_DIR/easytier-core-darwin"
   extract_file "$mac_zip" "easytier-macos-aarch64/easytier-cli" "$BIN_DIR/easytier-cli-darwin"
   chmod +x "$BIN_DIR/easytier-core-darwin" "$BIN_DIR/easytier-cli-darwin"
+fi
+
+need_linux_amd64=false
+for f in easytier-core-linux-amd64 easytier-cli-linux-amd64; do
+  if [ ! -f "$BIN_DIR/$f" ]; then
+    need_linux_amd64=true
+  fi
+done
+
+if [ "$need_linux_amd64" = true ]; then
+  echo "Downloading EasyTier Linux amd64 assets (v${ET_VERSION})..."
+  linux_amd64_zip="$(download_asset "$LINUX_AMD64_ASSET")"
+  extract_file "$linux_amd64_zip" "easytier-linux-x86_64/easytier-core" "$BIN_DIR/easytier-core-linux-amd64"
+  extract_file "$linux_amd64_zip" "easytier-linux-x86_64/easytier-cli" "$BIN_DIR/easytier-cli-linux-amd64"
+  chmod +x "$BIN_DIR/easytier-core-linux-amd64" "$BIN_DIR/easytier-cli-linux-amd64"
+fi
+
+need_linux_arm64=false
+for f in easytier-core-linux-arm64 easytier-cli-linux-arm64; do
+  if [ ! -f "$BIN_DIR/$f" ]; then
+    need_linux_arm64=true
+  fi
+done
+
+if [ "$need_linux_arm64" = true ]; then
+  echo "Downloading EasyTier Linux arm64 assets (v${ET_VERSION})..."
+  linux_arm64_zip="$(download_asset "$LINUX_ARM64_ASSET")"
+  extract_file "$linux_arm64_zip" "easytier-linux-aarch64/easytier-core" "$BIN_DIR/easytier-core-linux-arm64"
+  extract_file "$linux_arm64_zip" "easytier-linux-aarch64/easytier-cli" "$BIN_DIR/easytier-cli-linux-arm64"
+  chmod +x "$BIN_DIR/easytier-core-linux-arm64" "$BIN_DIR/easytier-cli-linux-arm64"
 fi
 
 echo "EasyTier assets ready in $BIN_DIR"
